@@ -82,7 +82,7 @@ class ChargeArtTests(unittest.TestCase):
         empty, half, full = [charge_art(percent, font) for percent in (0, 50, 100)]
         self.assertEqual(empty.size, full.size)
         for x, half_is_filled in ((60, True), (105, False)):
-            point = x, full.height // 2
+            point = x, full.height - font.size // 2 - font.size // 4
             expected = full if half_is_filled else empty
             self.assertNotEqual(empty.getpixel(point), full.getpixel(point))
             self.assertEqual(half.getpixel(point), expected.getpixel(point))

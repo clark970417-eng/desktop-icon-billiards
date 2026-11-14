@@ -135,12 +135,45 @@ class BilliardsMotionTests(unittest.TestCase):
         x, y = game.white.x + 200, game.white.y
         pointer.update(game, 9., x, y, False, True)
         pointer.update(game, 10., x, y, True, True)
-        for now, expected in ((10.75, .5), (11.5, 1.), (12., 1.)):
+        for now, expected in ((10.75, .5), (11.5, 1.)):
             pointer.update(game, now, x, y, True, True)
             self.assertAlmostEqual(game.charge, expected)
-        pointer.update(game, 12., x, y, False, True)
+        pointer.update(game, 11.5, x, y, False, True)
         self.assertEqual(game.state, 'stroke')
         self.assertAlmostEqual(game.power, game._shot_speed(1))
+
+    def test_pointer_cycles_and_releases_at_the_current_power(self):
+        from dib.overlay import TablePointer
+        for release, expected in ((2.25, .5), (3., 0.), (4.5, 1.), (6.75, .5)):
+            with self.subTest(release=release):
+                game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 2)
+                pointer = TablePointer()
+                x, y = game.white.x + 200, game.white.y
+                pointer.update(game, 0., x, y, False, True)
+                pointer.update(game, 0., x, y, True, True)
+                for elapsed, power, falling in ((.75, .5, False), (1.5, 1., True), (2.25, .5, True)):
+                    if elapsed <= release:
+                        pointer.update(game, elapsed, x, y, True, True)
+                        self.assertAlmostEqual(game.charge, power)
+                        self.assertEqual(pointer.charge_falling, falling)
+                pointer.update(game, release, x, y, False, True)
+                self.assertEqual(game.state, 'stroke')
+                self.assertAlmostEqual(game.power, game._shot_speed(expected))
+                self.assertEqual(game.shots, 1)
+                self.assertIsNone(pointer.charge_origin)
+
+    def test_release_outside_table_cancels_cycle_and_new_press_starts_at_zero(self):
+        from dib.overlay import TablePointer
+        game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 2)
+        pointer = TablePointer()
+        x, y = game.white.x + 200, game.white.y
+        pointer.update(game, 0., x, y, False, True)
+        pointer.update(game, 1., x, y, True, True)
+        pointer.update(game, 3., x, y, False, False)
+        self.assertEqual((game.state, game.shots, game.charge), ('ready', 0, 0.))
+        pointer.update(game, 4., x, y, True, True)
+        self.assertEqual(game.charge, 0.)
+        self.assertFalse(pointer.charge_falling)
 
     def test_manual_shoot_collision_chain_rebounds_and_rearms(self):
         game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 2)

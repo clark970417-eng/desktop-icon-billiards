@@ -293,6 +293,7 @@ class TablePointer:
         self.was_down = True
         self.held_since = None
         self.charge_origin = None
+        self.charge_falling = False
 
     def update(self, game, now, x, y, down, over_table):
         if over_table:
@@ -304,7 +305,9 @@ class TablePointer:
                 self.held_since = now
                 self.charge_origin = (x, y)
         if self.held_since is not None:
-            power = min(1, (now - self.held_since) / 1.5)
+            phase = (max(0., now - self.held_since) / 1.5) % 2
+            self.charge_falling = phase >= 1
+            power = 1 - abs(phase - 1)
             game.charge = power
             if not down:
                 self.held_since = None
@@ -987,10 +990,10 @@ class BilliardsOverlay:
             return
 
         percent = round(self.table.charge * 100)
-        key = (origin, percent)
+        key = (origin, percent, self.pointer.charge_falling)
         if key == self.charge_key:
             return
-        frame = charge_art(percent, self.charge_font)
+        frame = charge_art(percent, self.charge_font, self.pointer.charge_falling)
         width, height = frame.size
 
         left, top, right, bottom = self.primary_bounds

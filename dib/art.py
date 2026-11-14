@@ -112,25 +112,32 @@ def pocket_art(table, source):
 
 
 
-def charge_art(percent, font):
-    """Draw the charge label and its filled progress bar."""
+def charge_art(percent, font, falling=False):
+    """Compact power meter with a full track, percentage and cycle direction."""
+    percent = max(0, min(100, percent))
     pad = max(4, font.size // 2)
-    width = font.size * 8
-    height = font.size * 2 + pad
+    width, height = font.size * 10, font.size * 3
     frame = Image.new('RGBA', (width, height))
     draw = ImageDraw.Draw(frame)
     draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=pad,
-                           fill=(13, 25, 23, 248), outline=(105, 221, 179, 240))
-    draw.text((pad, height // 2), '力度', font=font, anchor='lm', fill=(235, 250, 243))
-
-    left = pad * 2 + font.size * 2
-    top = (height - pad) // 2
-    bar_width = width - pad - left
-    draw.rounded_rectangle((left, top, left + bar_width - 1, top + pad - 1),
-                           radius=pad // 2, fill=(49, 76, 70))
-    fill_width = round(bar_width * percent / 100)
+                           fill=(13, 25, 23, 244), outline=(74, 105, 94, 220))
+    label_y = pad + font.size // 2
+    draw.text((pad, label_y), '力度', font=font, anchor='lm', fill=(222, 238, 231))
+    draw.text((width - pad, label_y), f'{percent}%', font=font, anchor='rm', fill=(133, 242, 198))
+    # A drawn chevron avoids depending on arrow glyphs in the selected font.
+    cx, cy = width // 2, label_y
+    direction = 1 if falling else -1
+    span = max(2, font.size // 5)
+    draw.line(((cx - span, cy - direction * span), (cx, cy + direction * span),
+               (cx + span, cy - direction * span)), fill=(133, 242, 198), width=2)
+    left, right = pad, width - pad - 1
+    bottom = height - pad - 1
+    top = bottom - pad + 1
+    draw.rounded_rectangle((left, top, right, bottom), radius=pad // 2,
+                           fill=(49, 76, 70), outline=(71, 99, 89))
+    fill_width = round((right - left + 1) * percent / 100)
     if fill_width:
-        draw.rounded_rectangle((left, top, left + fill_width - 1, top + pad - 1),
+        draw.rounded_rectangle((left, top, left + fill_width - 1, bottom),
                                radius=min(pad, fill_width) // 2, fill=(111, 239, 185))
     return frame
 
