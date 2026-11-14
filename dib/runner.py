@@ -1,11 +1,12 @@
 """Animation thread that drives the layered windows outside Tk's event loop."""
 from __future__ import annotations
 
-import ctypes
 import threading
 import time
 
 import win32gui
+
+from .display import dpi_context
 
 FRAME_SECONDS = 1 / 60
 
@@ -35,18 +36,21 @@ class BilliardsRunner:
             raise RuntimeError('动画线程尚未退出，请稍后再次停止。')
 
     def _run(self):
+        with dpi_context(-4):
+            self._run_with_dpi()
+
+    def _run_with_dpi(self):
         try:
             # Tk may change the UI thread DPI context; match native desktop coordinates.
-            ctypes.windll.user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
             self.overlay.prepare()
             self.prepared.set()
             last = time.perf_counter()
             while not self.stopping.is_set():
                 now = time.perf_counter()
                 if self.show_request and not self.shown.is_set():
-                    self.overlay.show(*self.show_request)
-                    self.shown.set()
-                    last = now
+                    if self.overlay.show(*self.show_request) is not False:
+                        self.shown.set()
+                        last = now
                 if self.shown.is_set():
                     self.overlay.draw(now, min(0.05, now - last))
                 last = now

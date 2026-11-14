@@ -332,7 +332,8 @@ class DesktopBilliardsApp:
                 if not self.rank_offered:
                     self.rank_offered = True
                     self.root.after(800, self.offer_rank)
-                self.update_toolbar()
+                if not self.runner.overlay.input_suspended:
+                    self.update_toolbar()
                 overlay = self.runner.overlay
                 try:
                     while True:

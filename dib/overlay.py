@@ -28,7 +28,7 @@ from . import diag
 from .config import CREDIT, REPOSITORY_URL
 from .art import credit_layout, charge_art, cue_art, guide_art, pocket_art, pocket_particles, table_art, white_art
 from .balls import MAX_BALLS, ball_summary, fill_sources, priority_order
-from .display import dpi_context, monitors
+from .display import dpi_context, monitors, window_dpi
 from .shell import ShellDesktop
 from .table import MIN_SHOT_CHARGE, BilliardsMotion
 from .wallpaper import primary_wallpaper
@@ -353,6 +353,8 @@ class BilliardsOverlay:
         self.transition = None
         self.restart_requested = threading.Event()
         self.pointer = TablePointer()
+        self.input_suspended = False
+        self.input_pause_owned = False
         self.table_windows = {}
         self.guide_enabled = True
         self.guide_key = None
@@ -393,7 +395,7 @@ class BilliardsOverlay:
         self.was_visible = win32gui.IsWindowVisible(self.listview)
         if not self.was_visible:
             raise RuntimeError('桌面图标当前已隐藏，请先在桌面菜单中显示图标。')
-        self.font = _load_font(max(12, round(12 * ctypes.windll.user32.GetDpiForWindow(self.listview) / 96)))
+        self.font = _load_font(max(12, round(12 * window_dpi(self.listview) / 96)))
         self.classname = 'DesktopIconBilliardsOverlay'
         window_class = win32gui.WNDCLASS()
         window_class.hInstance = win32api.GetModuleHandle(None)
@@ -597,6 +599,10 @@ class BilliardsOverlay:
     def show(self, snapshot, journal):
         from .shell import atomic_json
 
+        now = time.perf_counter()
+        screen = self.read_pointer(now)
+        if screen is None:
+            return False  # Keep real icons visible while the input desktop is unavailable.
         try:
             for _ in self.items:
                 hwnd = win32gui.CreateWindowEx(
@@ -604,7 +610,7 @@ class BilliardsOverlay:
                     0, 0, 1, 1, self.parent, 0, win32api.GetModuleHandle(None), None)
                 self.windows.append(hwnd)
             self.transition = {'elapsed': 0.0, 'origins': [list(pose) for pose in self.poses]}
-            self.draw(0.0, 0.016)
+            self.draw(now, 0.016, screen)
             snapshot['hidden_listview'] = self.listview
             atomic_json(journal, snapshot)
             win32gui.ShowWindow(self.listview, win32con.SW_HIDE)
@@ -664,7 +670,13 @@ class BilliardsOverlay:
             if part in self.table_windows:
                 win32gui.ShowWindow(self.table_windows[part], win32con.SW_HIDE)
 
-    def draw(self, now, dt):
+    def draw(self, now, dt, screen=None):
+        # A lock/UAC/session transition can temporarily deny input-desktop access.
+        # Do not query the changing display or advance physics until it returns.
+        if screen is None:
+            screen = self.read_pointer(now)
+        if screen is None:
+            return
         if self.desktop.get_geometry() != self.geometry:
             raise RuntimeError('显示器布局变化，已停止台球并恢复桌面')
         if now - self.monitor_checked >= 0.5:
@@ -685,7 +697,7 @@ class BilliardsOverlay:
                 self.table.reset()
                 self.pointer = TablePointer()
                 self.drawn = [None] * len(self.items)
-            self.update_pointer(now)
+            self.update_pointer(now, screen)
             self.table.step(dt, now)
             self.draw_balls()
         self.aim_visible = self.felt_visible or bool(win32api.GetAsyncKeyState(win32con.VK_SHIFT) & 0x8000)
@@ -693,8 +705,36 @@ class BilliardsOverlay:
         self.draw_guide()
         self.draw_charge()
 
-    def update_pointer(self, now):
-        screen = win32gui.GetCursorPos()
+    def read_pointer(self, now):
+        """Suspend only an access-denied cursor read; unrelated failures stay visible."""
+        try:
+            screen = win32gui.GetCursorPos()
+        except win32gui.error as error:
+            if error.winerror != 5:
+                raise
+            if not self.input_suspended:
+                self.input_suspended = True
+                self.input_pause_owned = self.table.paused_at is None
+                if self.input_pause_owned:
+                    self.table.pause(now)
+                self.pointer = TablePointer()
+                self.table.charge = 0.
+                self.credit_pressed = None
+                self.credit_was_down = True
+                diag.log('cursor access denied; round paused and pending input cancelled')
+            return None
+        if self.input_suspended:
+            if self.input_pause_owned:
+                self.table.resume(now)
+            self.input_suspended = self.input_pause_owned = False
+            diag.log('cursor access restored; round resumed, waiting for a fresh press')
+        return screen
+
+    def update_pointer(self, now, screen=None):
+        if screen is None:
+            screen = self.read_pointer(now)
+            if screen is None:
+                return
         x, y = win32gui.ScreenToClient(self.parent, screen)
         left, top, right, bottom = self.table.bounds
         on_desktop = False
