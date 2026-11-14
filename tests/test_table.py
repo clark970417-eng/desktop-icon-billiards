@@ -6,6 +6,24 @@ from dib.table import BilliardsMotion
 
 
 class BilliardsMotionTests(unittest.TestCase):
+    def test_two_to_one_table_fits_small_portrait_ultrawide_and_offset_displays(self):
+        for area in ((0, 0, 640, 440), (0, 0, 1366, 728), (0, 0, 1920, 1040),
+                     (0, 0, 2560, 1528), (0, 0, 3840, 2080), (0, 0, 5120, 1400),
+                     (-1080, -300, 0, 1580), (3840, 200, 6400, 1728)):
+            with self.subTest(area=area):
+                game = BilliardsMotion(area, [(64, 64)] * 45)
+                left, top, right, bottom = game.bounds
+                self.assertEqual(right - left, 2 * (bottom - top))
+                self.assertAlmostEqual((left + right) / 2, (area[0] + area[2]) / 2, delta=.5)
+                self.assertAlmostEqual((top + bottom) / 2, (area[1] + area[3]) / 2, delta=.5)
+                self.assertGreaterEqual(left - game.pocket_radius, area[0])
+                self.assertGreaterEqual(top - game.pocket_radius, area[1])
+                self.assertLessEqual(right + game.pocket_radius, area[2])
+                self.assertLessEqual(bottom + game.pocket_radius, area[3])
+                for ball in game.bodies:
+                    self.assertTrue(left + ball.radius <= ball.x <= right - ball.radius)
+                    self.assertTrue(top + ball.radius <= ball.y <= bottom - ball.radius)
+
     def test_flags_and_public_attributes_match_the_manual_contract(self):
         game = BilliardsMotion((0, 0, 1600, 1000), [(64, 64)] * 3)
         self.assertTrue(game.desktop)
@@ -319,7 +337,7 @@ class BilliardsMotionTests(unittest.TestCase):
         game.white.x = right - 180
         game.icons[0].y = game.white.y - 150
         game.aim_at(right, game.white.y)
-        game.charge = .35  # Reach the rail before stopping.
+        game.charge = .25  # Reach the rail, then stop before the opposite rail on a 2:1 table.
         incoming, rebound = game.aim_guide()
         self.assertAlmostEqual(incoming[2][0], right - game.white.radius)
         self.assertEqual(rebound[0], 'white')

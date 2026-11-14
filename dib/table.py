@@ -31,8 +31,13 @@ class BilliardsMotion:
         left, top, right, bottom = work_area
         width = right - left
         height = bottom - top
-        self.bounds = (round(left + width * .06), round(top + height * .09),
-                       round(right - width * .06), round(bottom - height * .09))
+        # Fit a 2:1 playing surface inside the work area, including portrait and
+        # ultrawide displays. Keep the existing margins for pockets and controls.
+        table_height = max(1, math.floor(min(width * .88 / 2, height * .82)))
+        table_width = table_height * 2
+        x = round(left + (width - table_width) / 2)
+        y = round(top + (height - table_height) / 2)
+        self.bounds = (x, y, x + table_width, y + table_height)
         left, top, right, bottom = self.bounds
         self.width = right - left
         self.height = bottom - top
