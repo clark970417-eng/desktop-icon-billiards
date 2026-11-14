@@ -14,6 +14,17 @@ from .panel import ACCENT, BG, CARD, FONT, GOLD, MUTED, TEXT, configure_styles
 from .rank import RankError
 
 
+def round_details(entry):
+    if entry is None:
+        return ''
+    parts = []
+    if 'icon_count' in entry:
+        parts.append(f'{entry["icon_count"]} 个图标')
+    if 'shots' in entry:
+        parts.append(f'{entry["shots"]} 杆')
+    return ' · '.join(parts)
+
+
 class LeaderboardDialog:
     def __init__(self, root, load):
         self.load = load
@@ -42,17 +53,12 @@ class LeaderboardDialog:
         self.status_label.pack(side='bottom', fill='x', pady=(12, 0))
         self.status_label.bind('<ButtonRelease-1>', self._retry)
         self.failed = False
-        own = tk.Frame(shell, bg=CARD, padx=16, pady=14)
-        own.pack(side='bottom', fill='x', pady=(16, 0))
-        own_left = tk.Frame(own, bg=CARD)
-        own_left.pack(side='left')
-        tk.Label(own_left, text='我的最佳', font=(FONT, 9), fg=MUTED, bg=CARD).pack(anchor='w')
-        self.personal = tk.StringVar(top, value='正在查询…')
-        tk.Label(own_left, textvariable=self.personal, font=(FONT, 12, 'bold'), fg=ACCENT,
-                 bg=CARD).pack(anchor='w', pady=(5, 0))
-        self.personal_score = tk.StringVar(top)
-        tk.Label(own, textvariable=self.personal_score, font=('Segoe UI', 15, 'bold'),
-                 fg=TEXT, bg=CARD).pack(side='right')
+        self.me = None
+        self.own_message = '正在查询…'
+        self.own_canvas = tk.Canvas(shell, bg=CARD, bd=0, highlightthickness=0, height=104)
+        self.own_canvas.pack(side='bottom', fill='x', pady=(20, 0))
+        self.column_header = tk.Canvas(shell, bg=BG, bd=0, highlightthickness=0, height=42)
+        self.column_header.pack(fill='x', pady=(0, 4))
 
         body = tk.Frame(shell, bg=BG)
         body.pack(fill='both', expand=True)
@@ -65,8 +71,8 @@ class LeaderboardDialog:
             ('Vertical.Scrollbar.trough', {'sticky': 'ns', 'children': [
                 ('Vertical.Scrollbar.thumb', {'expand': '1', 'sticky': 'nswe'})]})])
         self.entries = []
-        self.row_height = max(64, int(top.winfo_fpixels('1i') * .53))
-        self.canvas = tk.Canvas(body, bg=BG, bd=0, highlightthickness=0, width=440, height=430,
+        self.row_height = max(74, int(top.winfo_fpixels('1i') * .57))
+        self.canvas = tk.Canvas(body, bg=BG, bd=0, highlightthickness=0, width=620, height=self.row_height * 10,
                                 takefocus=True, yscrollincrement=self.row_height)
         scrollbar = ttk.Scrollbar(body, orient='vertical', command=self.canvas.yview,
                                   style='Ranking.Vertical.TScrollbar')
@@ -84,11 +90,11 @@ class LeaderboardDialog:
         hwnd = win32gui.GetAncestor(top.winfo_id(), win32con.GA_ROOT)
         x0, y0, x1, y1 = win32gui.GetWindowRect(hwnd)
         bw, bh = x1 - x0 - top.winfo_width(), y1 - y0 - top.winfo_height()
-        width = min(max(540, top.winfo_reqwidth()), right - left - bw - 32)
+        width = min(max(700, top.winfo_reqwidth()), right - left - bw - 32)
         height = min(max(720, top.winfo_reqheight()), bottom - upper - bh - 32)
         x, y = left + (right - left - width - bw) // 2, upper + (bottom - upper - height - bh) // 2
         top.geometry(f'{width}x{height}+{x}+{y}')
-        top.minsize(min(width, 420), min(height, 350))
+        top.minsize(min(width, 540), min(height, 350))
         top.maxsize(right - left - bw - 32, bottom - upper - bh - 32)
         self.poll_id = top.after(100, self._poll)
         self.refresh()
@@ -97,6 +103,10 @@ class LeaderboardDialog:
         canvas = self.canvas
         canvas.delete('all')
         width = canvas.winfo_width()
+        columns = (18, width * .43, width * .62, width - 18)
+        self.column_header.delete('all')
+        for x, text, anchor in zip(columns, ('名次', '图标数', '击球数', '平均用时 / 秒'), ('w', 'center', 'center', 'e')):
+            self.column_header.create_text(x, 20, text=text, anchor=anchor, font=(FONT, 9), fill=MUTED)
         h = self.row_height
         colors = {1: GOLD, 2: '#bbcbd5', 3: '#d5ae93'}
         for index, entry in enumerate(self.entries):
@@ -105,19 +115,31 @@ class LeaderboardDialog:
             mine = entry['is_me']
             colour = ACCENT if mine else colors.get(entry['rank'], MUTED)
             if mine:
-                canvas.create_rectangle(0, y + 3, width, y + h - 3, fill='#183a30', outline='')
-                canvas.create_rectangle(0, y + 12, 3, y + h - 12, fill=ACCENT, outline='')
+                canvas.create_rectangle(0, y + 5, width, y + h - 5, fill='#183a30', outline='')
+                canvas.create_rectangle(0, y + 20, 3, y + h - 20, fill=ACCENT, outline='')
             elif index:
-                canvas.create_line(12, y, width - 12, y, fill='#1e302b')
-            canvas.create_text(14, cy, text='TOP', anchor='w', font=('Segoe UI', 8, 'bold'), fill=colour)
-            canvas.create_text(64, cy, text=str(entry['rank']), anchor='w',
-                               font=('Segoe UI', 16, 'bold'), fill=colour)
+                canvas.create_line(18, y, width - 18, y, fill='#1e302b')
+            canvas.create_text(columns[0], cy, text=f'{entry["rank"]:02d}', anchor='w',
+                               font=('Segoe UI', 17, 'bold'), fill=colour)
             if mine:
-                canvas.create_text(112, cy, text='我', anchor='w', font=(FONT, 9), fill=ACCENT)
-            canvas.create_text(width - 64, cy, text=f'{entry["avg_ms"] / 1000:.3f}', anchor='e',
-                               font=('Segoe UI', 16, 'bold'), fill=ACCENT if mine else TEXT)
-            canvas.create_text(width - 10, cy + 2, text='秒/颗', anchor='e', font=(FONT, 8), fill=MUTED)
+                canvas.create_text(72, cy, text='我', anchor='w', font=(FONT, 9), fill=ACCENT)
+            for x, key in zip(columns[1:3], ('icon_count', 'shots')):
+                canvas.create_text(x, cy, text=str(entry.get(key, '—')), font=('Segoe UI', 12), fill=MUTED)
+            canvas.create_text(columns[3], cy, text=f'{entry["avg_ms"] / 1000:.3f}', anchor='e',
+                               font=('Segoe UI', 17, 'bold'), fill=ACCENT if mine else TEXT)
         canvas.configure(scrollregion=(0, 0, width, max(1, len(self.entries) * h)))
+        own = self.own_canvas
+        own.delete('all')
+        own.create_text(columns[0], 24, text='我的最佳', anchor='w', font=(FONT, 9), fill=MUTED)
+        if self.me:
+            own.create_text(columns[0], 67, text=f'第 {self.me["rank"]:,} 名', anchor='w',
+                            font=(FONT, 12, 'bold'), fill=ACCENT)
+            for x, key in zip(columns[1:3], ('icon_count', 'shots')):
+                own.create_text(x, 67, text=str(self.me.get(key, '—')), font=('Segoe UI', 12), fill=MUTED)
+            own.create_text(columns[3], 67, text=f'{self.me["avg_ms"] / 1000:.3f}', anchor='e',
+                            font=('Segoe UI', 17, 'bold'), fill=ACCENT)
+        else:
+            own.create_text(columns[0], 67, text=self.own_message, anchor='w', font=(FONT, 11), fill=MUTED)
 
     def _wheel(self, event):
         if event.delta:
@@ -165,11 +187,10 @@ class LeaderboardDialog:
             self.busy = False
             if kind == 'ok':
                 self.entries = data['entries']
+                self.me = data['me']
+                self.own_message = '暂无上榜成绩'
                 self._draw_rows()
                 self.canvas.yview_moveto(0)
-                me = data['me']
-                self.personal.set(f'第 {me["rank"]:,} 名' if me else '暂无上榜成绩')
-                self.personal_score.set(f'{me["avg_ms"] / 1000:.3f} 秒/颗' if me else '')
                 stamp = datetime.fromisoformat(data['generated_at'].replace('Z', '+00:00')).astimezone()
                 self.status.set(('榜单暂无成绩 · ' if not data['entries'] else '') + f'更新于 {stamp:%m-%d %H:%M:%S}')
             else:
@@ -179,5 +200,6 @@ class LeaderboardDialog:
                 self.status_label.configure(cursor='hand2', fg=ACCENT)
                 self.status.set(message + ' · 点击重试')
                 if not self.entries:
-                    self.personal.set('暂时无法查询')
+                    self.own_message = '暂时无法查询'
+                    self._draw_rows()
         self.poll_id = self.top.after(100, self._poll)

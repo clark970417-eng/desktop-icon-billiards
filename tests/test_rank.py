@@ -133,6 +133,27 @@ class ApiTests(unittest.TestCase):
             else:
                 self.assertNotIn('X-Device-Id', headers)
 
+    def test_rankings_preserves_round_counts_and_formats_optional_details(self):
+        from dib.leaderboard import round_details
+        entry = {'rank': 1, 'avg_ms': 1234, 'is_me': True, 'icon_count': 26, 'shots': 18}
+        data = {'entries': [entry], 'me': entry, 'generated_at': '2026-11-12T12:00:00Z'}
+        self.server.reply(200, data)
+        result = self.api.rankings(self.creds)
+        self.assertEqual(result, data)
+        self.assertEqual(round_details(result['me']), '26 个图标 · 18 杆')
+        self.assertEqual(round_details({'rank': 1, 'avg_ms': 1234}), '')
+        self.assertEqual(round_details(None), '')
+
+    def test_rankings_rejects_invalid_round_counts(self):
+        for key in ('icon_count', 'shots'):
+            for value in (0, -1, True, 1.5, '26', None):
+                with self.subTest(key=key, value=value):
+                    entry = {'rank': 1, 'avg_ms': 1234, 'is_me': False, key: value}
+                    self.server.reply(200, {'entries': [entry], 'me': None,
+                                            'generated_at': '2026-11-12T12:00:00Z'})
+                    with self.assertRaises(RankError):
+                        self.api.rankings()
+
     def test_rankings_rejects_invalid_rows_and_timestamps(self):
         good = {'entries': [], 'me': None, 'generated_at': '2026-11-12T12:00:00Z'}
         for changes in ({'entries': [{'rank': 1, 'avg_ms': -1, 'is_me': False}]},

@@ -159,7 +159,9 @@ class RankApi:
         def valid_entry(entry):
             return (isinstance(entry, dict) and type(entry.get('rank')) is int and entry['rank'] > 0
                     and type(entry.get('avg_ms')) in (int, float) and math.isfinite(entry['avg_ms'])
-                    and entry['avg_ms'] > 0 and type(entry.get('is_me')) is bool)
+                    and entry['avg_ms'] > 0 and type(entry.get('is_me')) is bool
+                    and all(key not in entry or (type(entry[key]) is int and entry[key] > 0)
+                            for key in ('icon_count', 'shots')))
         entries = data.get('entries')
         if (not isinstance(entries, list) or len(entries) > 50 or not all(map(valid_entry, entries))
                 or 'me' not in data or (data['me'] is not None and not valid_entry(data['me']))):
