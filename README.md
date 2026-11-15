@@ -8,7 +8,7 @@ Windows 10 / 11 x64 · 单文件 EXE · MIT
 
 ## 下载
 
-Windows 版 v0.2.3 为单文件 EXE。[GitHub 下载](https://github.com/liuxiaogang-com/desktop-icon-billiards/releases/download/v0.2.3/DesktopIconBilliards-0.2.3-win-x64.exe) · [CNB 国内镜像](https://cnb.cool/liuxiaogang/desktop-icon-billiards/-/releases/download/v0.2.3/DesktopIconBilliards-0.2.3-win-x64.exe)
+Windows 版 v0.2.4 为单文件 EXE。[GitHub 下载](https://github.com/liuxiaogang-com/desktop-icon-billiards/releases/download/v0.2.4/DesktopIconBilliards-0.2.4-win-x64.exe) · [CNB 国内镜像](https://cnb.cool/liuxiaogang/desktop-icon-billiards/-/releases/download/v0.2.4/DesktopIconBilliards-0.2.4-win-x64.exe)
 
 `desktop-icon-billiards` 的源码和发布附件在两个平台同步。[GitHub 仓库](https://github.com/liuxiaogang-com/desktop-icon-billiards) · [CNB 国内镜像仓库](https://cnb.cool/liuxiaogang/desktop-icon-billiards)
 
@@ -32,11 +32,15 @@ Windows 版 v0.2.3 为单文件 EXE。[GitHub 下载](https://github.com/liuxiao
 
 ![成绩卡片示例：大师段位，全球第 1,204 名，超过 87% 的玩家](docs/images/result-card.png)
 
+### 白球外观
+
+点击工具栏「白球外观」，选择 JPG、PNG 或 WebP 图片，拖动和缩放调整圆形裁切后点击「使用图片」。图片只保存在本机，下次启动自动加载，也可恢复默认白球；不改变球的大小、碰撞和力度。
+
 ### 窗口与隐藏
 
 - 球台固定为 **2:1**，在主屏可用区域内居中适配，不会因宽屏、竖屏或任务栏位置而拉伸。多屏下只在主屏开局，桌面绘制与鼠标使用物理像素坐标。
 - 锁屏、安全桌面或会话切换导致鼠标位置暂时无法读取时，本局暂停、取消未完成的蓄力，恢复后重新按下即可击球；暂停期间不计时。
-- 主窗口只保留**无标题栏、无状态栏的横条**：用时、进球和剩余数量与全部操作按钮排成一行，无折叠菜单。拖动左侧手柄或数据区域移动横条，位置会自动保存；点击「退出」恢复桌面。
+- 主窗口采用**无标题栏的两行工具栏**：上排放功能与作者入口，下排显示用时、进球和剩余数量，以及重新开始和退出，无折叠菜单。拖动左侧手柄或数据区域移动横条，位置会自动保存；点击「退出」恢复桌面。
 - **0.1.4 暂时停用隐藏功能**：不显示隐藏按钮，`Ctrl+Alt+H` 不注册。需要离开时请点击「退出」或按 `Ctrl+Alt+X` 恢复桌面。
 - **台面**开启时显示圆形洞口；关闭时进入隐藏台面模式，洞口改为当前电脑原生回收站图标。每次开启都会弹窗提示操作：工具条移开鼠标 1 秒后收起，原位置保留小眼睛，鼠标移上去即可恢复；按住 Shift 临时显示半透明球杆和辅助线，松开隐藏，蓄力时显示半透明力度条。点击工具条的台面开关恢复普通模式，Ctrl+Alt+X 退出。
 - 图标入袋时会滑进球袋、旋转缩小并淡出，同时泛起一圈涟漪。
