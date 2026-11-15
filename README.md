@@ -8,7 +8,7 @@ Windows 10 / 11 x64 · 单文件 EXE · MIT
 
 ## 下载
 
-Windows 版 v0.2.2 为单文件 EXE。[GitHub 下载](https://github.com/liuxiaogang-com/desktop-icon-billiards/releases/download/v0.2.2/DesktopIconBilliards-0.2.2-win-x64.exe) · [CNB 国内镜像](https://cnb.cool/liuxiaogang/desktop-icon-billiards/-/releases/download/v0.2.2/DesktopIconBilliards-0.2.2-win-x64.exe)
+Windows 版 v0.2.3 为单文件 EXE。[GitHub 下载](https://github.com/liuxiaogang-com/desktop-icon-billiards/releases/download/v0.2.3/DesktopIconBilliards-0.2.3-win-x64.exe) · [CNB 国内镜像](https://cnb.cool/liuxiaogang/desktop-icon-billiards/-/releases/download/v0.2.3/DesktopIconBilliards-0.2.3-win-x64.exe)
 
 `desktop-icon-billiards` 的源码和发布附件在两个平台同步。[GitHub 仓库](https://github.com/liuxiaogang-com/desktop-icon-billiards) · [CNB 国内镜像仓库](https://cnb.cool/liuxiaogang/desktop-icon-billiards)
 
@@ -17,7 +17,7 @@ Windows 版 v0.2.2 为单文件 EXE。[GitHub 下载](https://github.com/liuxiao
 ## 玩法
 
 1. 启动后等桌面图标摆好。移动鼠标选择白球的出球方向，**按住左键蓄力，松手击球**。按下的位置旁会显示「力度」进度条；力度在 0%～100% 之间往返循环，1.5 秒升满、1.5 秒降回零；进度条显示百分比和升降方向，松手按当前力度击球，轻点可小幅推球。
-2. 用「**辅助线 · 开 / 关**」切换瞄准辅助。白线标记首次碰撞前的路线，蓝线表示白球碰球或碰库后的方向，绿线表示被撞图标的方向。路线会随力度变化，终点是预计的下一次碰撞、入袋或停球位置。辅助线带有描边，并会根据壁纸明暗自动换成深色或浅色，浅色壁纸上也看得清。路线上还会淡淡地画出碰撞圈：白球接触瞬间的位置，以及被撞图标的碰撞范围（比图标本身略大，这就是实际判定碰撞的圆）；图标被撞到时也会闪现一圈。
+2. 用「**辅助线 · 开 / 关**」切换瞄准辅助。白线标记首次碰撞前的路线，蓝线表示白球碰球或碰库后的方向，绿线表示被撞图标的方向。待击球时即可查看方向，路线不随蓄力值变化，画到下一次碰撞或洞口；辅助线不代表实际滚动距离，能否到达仍取决于击球力度。辅助线带有描边，并会根据壁纸明暗自动换成深色或浅色，浅色壁纸上也看得清。路线上还会淡淡地画出碰撞圈：白球接触瞬间的位置，以及被撞图标的碰撞范围（比图标本身略大，这就是实际判定碰撞的圆）；图标被撞到时也会闪现一圈。
 3. 主窗口显示本局用时、进球数和剩余图标数。白球入袋时会尝试自动摆回，如果没有合适的位置，可以点击台面空处摆球。白球入袋不计入进球数。
 4. 清台后查看总用时和图标总数。点击「**重新开始**」重置本局，也可以在中途重开。
 5. 点击「退出」、按 `Esc` 或使用全局快捷键 `Ctrl+Alt+X`，恢复桌面。
