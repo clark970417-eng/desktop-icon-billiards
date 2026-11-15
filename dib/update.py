@@ -7,6 +7,7 @@ opened in the browser, never executed or written over the running executable.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import re
 import urllib.parse
 import urllib.request
@@ -25,10 +26,22 @@ def version_tuple(value):
     return tuple(int(part) for part in value.split('.'))
 
 
+def release_date(info):
+    """Optional display date; malformed metadata must not block an update."""
+    value = info.get('date')
+    if isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?', value):
+        try:
+            datetime.fromisoformat(value)
+            return {'date': value}
+        except ValueError:
+            pass
+    return {}
+
+
 def release_entries(info):
     """Return the display list: latest release first, then valid history entries."""
     latest = version_tuple(info['version'])
-    entries = [{'version': info['version'], 'notes': info.get('notes', '')}]
+    entries = [{'version': info['version'], 'notes': info.get('notes', ''), **release_date(info)}]
     seen = {latest}
     history = info.get('history', [])
     if not isinstance(history, list):
@@ -44,7 +57,7 @@ def release_entries(info):
         if key >= latest or key in seen or not isinstance(notes, str) or len(notes) > MAX_NOTES:
             continue
         seen.add(key)
-        entries.append({'version': row['version'], 'notes': notes})
+        entries.append({'version': row['version'], 'notes': notes, **release_date(row)})
     entries[1:] = sorted(entries[1:], key=lambda row: version_tuple(row['version']), reverse=True)
     return entries[:21]
 
@@ -67,7 +80,7 @@ def parse_update(data, current):
         raise ValueError('download_url must be an HTTPS URL')
     if not isinstance(notes, str) or len(notes) > MAX_NOTES:
         raise ValueError('notes must be text, up to 4000 characters')
-    result = {'version': info['version'], 'download_url': url, 'notes': notes}
+    result = {'version': info['version'], 'download_url': url, 'notes': notes, **release_date(info)}
     if 'history' in info:
         result['history'] = release_entries(info)[1:]
     return result

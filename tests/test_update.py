@@ -34,6 +34,17 @@ class VersionTupleTests(unittest.TestCase):
 
 
 class ParseUpdateTests(unittest.TestCase):
+    def test_optional_dates_survive_parsing_and_invalid_dates_are_ignored(self):
+        info = feed(date='2026-11-15 16:30', history=[
+            {'version': '0.1.9', 'notes': 'old', 'date': '2026-11-14'}])
+        entries = release_entries(parse_update(encoded(info), '0.1.0'))
+        self.assertEqual([row['date'] for row in entries], ['2026-11-15 16:30', '2026-11-14'])
+        for value in (None, 123, '2026-02-30', '20261115', 'invalid', '2026-11-15 25:61'):
+            with self.subTest(value=value):
+                info = feed(date=value, history=[{'version': '0.1.9', 'notes': 'old', 'date': value}])
+                entries = release_entries(parse_update(encoded(info), '0.1.0'))
+                self.assertTrue(all('date' not in row for row in entries))
+
     def test_returns_release_when_newer(self):
         result = parse_update(encoded(feed()), '0.1.0')
         self.assertEqual(result['version'], '0.2.0')

@@ -18,6 +18,7 @@ import win32gui
 from PIL import Image, ImageTk
 
 from . import card, diag
+from .release_notes import note_blocks
 
 BG = '#0e1a18'
 CARD = '#152623'
@@ -355,48 +356,89 @@ class ResultDialog:
 
 
 def show_update_dialog(root, current, info, entries, on_download):
-    """A dark release-notes dialog. ``entries`` is the display list from ``release_entries``;
-    ``on_download(dialog)`` opens the download and closes the dialog when it succeeds."""
+    """Native, display-only rich release notes with fixed header/footer."""
     dialog = tk.Toplevel(root)
-    dialog.title(f'发现新版本 {info["version"]}')
+    dialog.withdraw()
+    dialog.title('软件更新')
     dialog.configure(bg=BG)
-    dialog.transient(root)
-    dialog.resizable(False, False)
-    shell = tk.Frame(dialog, bg=BG, padx=18, pady=16)
+    if root.state() != 'withdrawn':
+        dialog.transient(root)
+    dialog.resizable(True, True)
+    scale = max(1., root.winfo_fpixels('1i') / 96)
+    pad = round(18 * scale)
+    try:
+        dialog.iconbitmap(str(card.LOGO.with_suffix('.ico')))
+    except tk.TclError:
+        pass
+    shell = tk.Frame(dialog, bg=BG, padx=pad, pady=pad)
     shell.pack(fill='both', expand=True)
+    header = tk.Frame(shell, bg=BG)
+    header.pack(fill='x', pady=(0, round(12 * scale)))
+    tk.Label(header, text='更新内容', font=(FONT, 13, 'bold'), fg=TEXT, bg=BG).pack(side='left')
+    tk.Label(header, text=f'当前 v{current}', font=(FONT, 9), fg=MUTED, bg=BG).pack(side='right')
 
-    tk.Label(shell, text='发现新版本', font=(FONT, 12, 'bold'), fg=TEXT, bg=BG).pack(anchor='w')
-    versions = tk.Frame(shell, bg=BG)
-    versions.pack(fill='x', pady=(4, 10))
-    tk.Label(versions, text=f'v{current}', font=(FONT, 9), fg=MUTED, bg=BG).pack(side='left')
-    tk.Label(versions, text='  →  ', font=(FONT, 9), fg=MUTED, bg=BG).pack(side='left')
-    tk.Label(versions, text=f'v{info["version"]}', font=(NUMBERS, 11), fg=ACCENT, bg=BG).pack(side='left')
-
-    card = tk.Frame(shell, bg=CARD)
-    card.pack(fill='both', expand=True)
-    notes = tk.Text(card, width=46, height=12, wrap='word', bg=CARD, fg=TEXT, relief='flat', bd=0,
-                    highlightthickness=0, padx=14, pady=10, font=(FONT, 9), spacing3=3, cursor='arrow',
+    footer = tk.Frame(shell, bg=BG)
+    footer.pack(side='bottom', fill='x', pady=(round(12 * scale), 0))
+    Pill(footer, '下载更新', lambda: on_download(dialog), 'primary', bold=True,
+         padx=20, pady=10).pack(side='right')
+    Pill(footer, '稍后', dialog.destroy, 'soft', padx=18, pady=10).pack(side='right', padx=(0, 10))
+    body = tk.Frame(shell, bg=CARD, highlightthickness=1, highlightbackground='#29443c')
+    body.pack(fill='both', expand=True)
+    notes = tk.Text(body, width=38, height=10, wrap='word', bg=CARD, fg=TEXT, relief='flat', bd=0,
+                    highlightthickness=0, padx=round(18 * scale), pady=round(14 * scale),
+                    font=(FONT, 10), spacing1=2, spacing3=round(9 * scale), cursor='arrow',
                     insertwidth=0, selectbackground='#2b4a44')
-    scrollbar = ttk.Scrollbar(card, orient='vertical', command=notes.yview, style='Dark.Vertical.TScrollbar')
+    scrollbar = ttk.Scrollbar(body, orient='vertical', command=notes.yview, style='Dark.Vertical.TScrollbar')
     notes.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side='right', fill='y')
     notes.pack(side='left', fill='both', expand=True)
-    notes.tag_configure('latest', font=(FONT, 10, 'bold'), foreground=ACCENT, spacing1=0)
-    notes.tag_configure('older', font=(FONT, 10, 'bold'), foreground=TEXT, spacing1=8)
     notes.tag_configure('body', foreground='#c4d9d2')
-    for index, entry in enumerate(entries):
-        notes.insert('end', f'{entry["version"]}\n', 'latest' if index == 0 else 'older')
-        notes.insert('end', (entry['notes'] or '暂无更新说明') + '\n', 'body')
-    notes.configure(state='disabled')
+    notes.tag_configure('heading', font=(FONT, 12, 'bold'), foreground=TEXT,
+                        spacing1=round(12 * scale), spacing3=round(8 * scale))
+    notes.tag_configure('version', font=(NUMBERS, 13, 'bold'), foreground=ACCENT,
+                        spacing1=round(18 * scale), spacing3=round(12 * scale))
+    notes.tag_configure('first_version', spacing1=0)
+    notes.tag_configure('date', font=(FONT, 9), foreground=MUTED)
+    notes.tag_configure('list', lmargin1=0, lmargin2=round(19 * scale), foreground='#c4d9d2')
+    notes.tag_configure('quote', foreground=MUTED, lmargin1=round(12 * scale), lmargin2=round(12 * scale))
+    notes.tag_configure('bold', font=(FONT, 10, 'bold'), foreground=TEXT)
+    notes.tag_configure('code', font=('Consolas', 10), foreground=ACCENT, background='#203a32')
+    notes.tag_configure('space', font=(FONT, 3), spacing1=0, spacing3=0)
 
-    buttons = tk.Frame(shell, bg=BG)
-    buttons.pack(fill='x', pady=(14, 0))
-    Pill(buttons, '去更新', lambda: on_download(dialog), 'primary', bold=True, padx=18).pack(side='right')
-    Pill(buttons, '稍后', dialog.destroy, 'soft', padx=16).pack(side='right', padx=(0, 8))
+    def render():
+        notes.configure(state='normal')
+        notes.delete('1.0', 'end')
+        for index, entry in enumerate(entries):
+            tags = ('version', 'first_version') if index == 0 else ('version',)
+            notes.insert('end', f'v{entry["version"]}'+ ('  ·  最新版本' if index == 0 else ''), tags)
+            if entry.get('date'):
+                notes.insert('end', f'    {entry["date"]}', (*tags, 'date'))
+            notes.insert('end', '\n', tags)
+            for kind, spans in note_blocks(entry['notes'] or '暂无更新说明'):
+                if kind == 'space':
+                    notes.insert('end', '\n', 'space')
+                    continue
+                for text, style in spans:
+                    tags = (kind, style) if style and not (kind == 'heading' and style == 'bold') else (kind,)
+                    notes.insert('end', text, tags)
+                notes.insert('end', '\n', kind)
+        notes.configure(state='disabled')
+        notes.yview_moveto(0)
+
+    render()
     dialog.bind('<Escape>', lambda event: dialog.destroy())
-
-    # Align the dialog's right edge with the main window, just below it, and keep it on screen.
     dialog.update_idletasks()
-    x = max(0, root.winfo_x() + root.winfo_width() - dialog.winfo_reqwidth())
-    dialog.geometry(f'+{x}+{root.winfo_y() + root.winfo_height() + 10}')
+    monitor = win32api.MonitorFromPoint((root.winfo_rootx(), root.winfo_rooty()),
+                                       win32con.MONITOR_DEFAULTTONEAREST)
+    left, top, right, bottom = win32api.GetMonitorInfo(monitor)['Work']
+    # Leave space for native borders and taskbar, including high-DPI small displays.
+    width = max(1, min(round(620 * scale), right - left - round(32 * scale)))
+    height = max(1, min(round(520 * scale), bottom - top - round(64 * scale)))
+    dialog.minsize(min(width, round(400 * scale)), min(height, round(280 * scale)))
+    dialog.maxsize(width, height)
+    x = left + (right - left - width) // 2
+    y = top + (bottom - top - height) // 2
+    dialog.geometry(f'{width}x{height}+{x}+{y}')
+    dialog.deiconify()
+    dialog.lift()
     return dialog
