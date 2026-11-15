@@ -7,6 +7,7 @@ simulation, including pocket exits and the ball-in-hand state after a scratch.
 """
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 
 from .body import Body
 
@@ -17,6 +18,23 @@ RAIL_REBOUND = .88
 BALL_IMPULSE = .96
 ROLLING_DRAG = .45
 STOP_SPEED = .008
+
+
+@dataclass(frozen=True)
+class RoundSnapshot:
+    """Value-only state, captured by the animation thread after a complete update."""
+
+    round_serial: int
+    state: str
+    icon_count: int
+    pocketed_icons: int
+    play_ms: int
+    shots: int
+    first_shot_at: float | None
+
+    @property
+    def round_seconds(self):
+        return self.play_ms // 1000
 
 
 class BilliardsMotion:
@@ -60,6 +78,7 @@ class BilliardsMotion:
                 self.rack.append((x, y))
         # Counts every (re)started round so observers can tell rounds apart.
         self.round_serial = 0
+        self.snapshot_sink = None
         self.reset()
 
     def reset(self):
@@ -85,6 +104,17 @@ class BilliardsMotion:
         self.break_shot = True
         self.aim = self._aim()
         self.poses = self._poses()
+        if self.snapshot_sink is not None:
+            self.snapshot_sink(self.snapshot())
+
+    @property
+    def icon_count(self):
+        return len(self.icons)
+
+    def snapshot(self):
+        """Only the owner thread may capture the live table; readers get frozen values."""
+        return RoundSnapshot(self.round_serial, self.state, self.icon_count,
+                             self.pocketed_icons, self.play_ms, self.shots, self.first_shot_at)
 
     def active_bodies(self):
         return [body for index, body in enumerate(self.bodies) if index not in self.sunk]
@@ -212,7 +242,7 @@ class BilliardsMotion:
         return tip, (tip[0] - dx * length, tip[1] - dy * length)
 
     def aim_guide(self):
-        """Predict the opening shot and one outgoing leg per moving ball."""
+        """Show the aim direction and one outgoing leg, independent of shot power."""
         return self.aim_preview()[0]
 
     def aim_preview(self):
@@ -226,10 +256,9 @@ class BilliardsMotion:
             return (), ()
         x, y, radius = self.white.x, self.white.y, self.white.radius
         dx, dy = self.aim
-        speed = self._shot_speed(max(MIN_SHOT_CHARGE, self.charge))
         targets = [body for index, body in enumerate(self.icons, 1) if index not in self.sunk]
         origin = x, y
-        hit, kind, contact, velocity = self._guide_leg(origin, (dx * speed, dy * speed), radius, targets)
+        hit, kind, contact, velocity = self._guide_leg(origin, (dx, dy), radius, targets)
         lines = []
         gap = radius + 5
         if math.dist(origin, hit) > gap:
@@ -262,25 +291,18 @@ class BilliardsMotion:
         return tuple(lines), tuple(circles)
 
     def _guide_leg(self, origin, velocity, radius, obstacles):
-        """Return endpoint, contact type, contact data and remaining velocity."""
+        """Trace a direction to the next geometric contact; do not predict stopping."""
         x, y = origin
         speed = math.hypot(*velocity)
-        stop = self.height * STOP_SPEED
-        if speed <= stop:
+        if speed <= 1e-9:
             return origin, 'stop', None, (0., 0.)
         dx, dy = velocity[0] / speed, velocity[1] / speed
-        drag = self.height * ROLLING_DRAG
-        distance = (speed ** 2 - stop ** 2) / (2 * drag)
-        kind, contact = 'stop', None
-        boundary, boundary_kind, boundary_contact = self._boundary_event(origin, (dx, dy), radius)
-        if boundary <= distance:
-            distance, kind, contact = boundary, boundary_kind, boundary_contact
+        distance, kind, contact = self._boundary_event(origin, (dx, dy), radius)
         for body in obstacles:
             entry = self._ray_circle(x, y, dx, dy, body.x, body.y, radius + body.radius)
             if entry is not None and entry < distance:
                 distance, kind, contact = entry, 'ball', body
-        speed = math.sqrt(max(0., speed ** 2 - 2 * drag * distance))
-        return (x + dx * distance, y + dy * distance), kind, contact, (dx * speed, dy * speed)
+        return (x + dx * distance, y + dy * distance), kind, contact, velocity
 
     def _boundary_event(self, origin, direction, radius):
         """First rail or pocket contact, shared by the guide and moving balls.

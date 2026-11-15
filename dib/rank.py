@@ -293,7 +293,7 @@ class RankController:
             return
         if table.round_serial != self.serial:
             self._begin(table)
-        if self.skip or not is_rankable(len(table.icons)):
+        if self.skip or not is_rankable(table.icon_count):
             return
         if table.first_shot_at is not None and not self.shot_seen:
             self.shot_seen = True
@@ -305,7 +305,7 @@ class RankController:
 
     def lines(self, table):
         """Up to three short lines for the summary label under the stats."""
-        count = len(table.icons)
+        count = table.icon_count
         if table.state == 'finished':
             lines = [f'本局平均 {average_seconds(table.play_ms, count):.2f} 秒/颗（{count} 颗）']
             if self.enabled:
@@ -334,7 +334,7 @@ class RankController:
             return {'phase': 'off'}
         if self.skip:
             return {'phase': 'skipped', 'message': '本局开始后才开启排名，下一局起计入。'}
-        if not is_rankable(len(table.icons)):
+        if not is_rankable(table.icon_count):
             return {'phase': 'skipped', 'message': f'图标超过 {MAX_RANKED_BALLS} 个，本局不计入排名。'}
         if self.outcome is None:
             return {'phase': 'pending'}
@@ -368,7 +368,7 @@ class RankController:
         self.start_token += 1  # invalidate answers that belong to the previous round
         # Enabled in the middle of a round: it cannot be verified, so it is not ranked.
         self.skip = table.first_shot_at is not None
-        if not self.skip and is_rankable(len(table.icons)):
+        if not self.skip and is_rankable(table.icon_count):
             self._request_start()
 
     def _request_start(self):
@@ -393,7 +393,7 @@ class RankController:
             return
         self.status = ['正在提交成绩…']
         serial, round_id = self.serial, self.round_id
-        total_ms, count, shots = table.play_ms, len(table.icons), table.shots
+        total_ms, count, shots = table.play_ms, table.icon_count, table.shots
 
         def job():
             try:

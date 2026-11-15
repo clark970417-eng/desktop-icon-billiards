@@ -15,6 +15,41 @@ def _credit_font(size):
         return ImageFont.load_default(size)
 
 
+def round_actions_layout(table):
+    """Button drawing and hit testing share the same desktop-client rectangles."""
+    size = max(12, min(22, round(table.height / 40)))
+    width, height, gap = size * 8, size * 3, size
+    left, top, right, bottom = table.bounds
+    x = round((left + right - width * 2 - gap) / 2)
+    y = round((top + bottom - height) / 2)
+    return size, (
+        ('again', '再来一局', (x, y, x + width, y + height)),
+        ('quit', '退出游戏', (x + width + gap, y, x + width * 2 + gap, y + height)),
+    )
+
+
+def round_actions_art(table, hovered=None, pressed=None):
+    size, rows = round_actions_layout(table)
+    ox, oy = rows[0][2][:2]
+    frame = Image.new('RGBA', (rows[-1][2][2] - ox, rows[-1][2][3] - oy))
+    draw = ImageDraw.Draw(frame)
+    font = _credit_font(size)
+    for action, text, (left, top, right, bottom) in rows:
+        if action == 'again':
+            fill = (105, 221, 179) if hovered != action else (134, 239, 199)
+            color = (12, 39, 31)
+        else:
+            fill = (25, 49, 43) if hovered != action else (40, 71, 62)
+            color = (231, 248, 240)
+        if pressed == action:
+            fill = tuple(round(channel * .85) for channel in fill)
+        draw.rounded_rectangle((left - ox, top - oy, right - ox - 1, bottom - oy - 1),
+                               radius=size // 2, fill=(*fill, 248), outline=(107, 165, 143, 230))
+        draw.text(((left + right) / 2 - ox, (top + bottom) / 2 - oy), text,
+                  font=font, anchor='mm', fill=color)
+    return frame, ox, oy
+
+
 def credit_layout(table, credit):
     """Share the text positions and hit rectangles in desktop coordinates."""
     left, top, right, bottom = table.bounds

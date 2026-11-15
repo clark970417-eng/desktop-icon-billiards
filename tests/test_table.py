@@ -353,7 +353,7 @@ class BilliardsMotionTests(unittest.TestCase):
         blocker.x = target.x + 220 * direction[0]
         blocker.y = target.y + 220 * direction[1]
         game.aim_at(target.x, game.white.y)
-        game.charge = .35  # Enough travel to reach both balls; zero charge is a short nudge.
+        game.charge = .35  # Charge does not change the direction guide.
         incoming, white, outgoing = game.aim_guide()
         self.assertEqual([segment[0] for segment in (incoming, white, outgoing)], ['incoming', 'white', 'target'])
         self.assertAlmostEqual(incoming[2][0], target.x - forward)
@@ -364,22 +364,38 @@ class BilliardsMotionTests(unittest.TestCase):
         game.shoot(.5)
         self.assertEqual(game.aim_guide(), ())
 
-    def test_aim_guide_rebounds_from_the_rail_and_marks_the_stop(self):
+    def test_aim_guide_rebounds_to_next_contact_independent_of_charge(self):
         game = BilliardsMotion((0, 0, 4200, 700), [(64, 64)])
         left, _, right, _ = game.bounds
         game.white.x = right - 180
         game.icons[0].y = game.white.y - 150
         game.aim_at(right, game.white.y)
-        game.charge = .25  # Reach the rail, then stop before the opposite rail on a 2:1 table.
-        incoming, rebound = game.aim_guide()
-        self.assertAlmostEqual(incoming[2][0], right - game.white.radius)
-        self.assertEqual(rebound[0], 'white')
-        self.assertEqual(rebound[1], incoming[2])
-        self.assertEqual(rebound[2][1], game.white.y)
-        self.assertGreater(rebound[2][0], left + game.white.radius)
-        self.assertLess(rebound[2][0], game.white.x)
-        game.charge = 1
-        self.assertAlmostEqual(game.aim_guide()[1][2][0], left + game.white.radius)
+        baseline = game.aim_preview()
+        for charge in (0., .25, .5, 1., .75, 0.):
+            with self.subTest(charge=charge):
+                game.charge = charge
+                self.assertEqual(game.aim_preview(), baseline)
+                incoming, rebound = game.aim_guide()
+                self.assertAlmostEqual(incoming[2][0], right - game.white.radius)
+                self.assertEqual(rebound[0], 'white')
+                self.assertEqual(rebound[1], incoming[2])
+                self.assertEqual(rebound[2][1], game.white.y)
+                self.assertAlmostEqual(rebound[2][0], left + game.white.radius)
+
+    def test_unheld_aim_reaches_ball_and_charge_does_not_change_collision_directions(self):
+        game = BilliardsMotion((0, 0, 1920, 1080), [(64, 64)])
+        target = game.icons[0]
+        target.x, target.y = game.white.x + 400, game.white.y + 25
+        game.aim_at(target.x, game.white.y)
+        baseline = game.aim_preview()
+        self.assertEqual([role for role, _, _ in baseline[0]], ['incoming', 'white', 'target'])
+        self.assertEqual([role for role, _, _ in baseline[1]], ['ghost', 'target'])
+        for charge in (.01, .3, .8, 1., .5, 0.):
+            game.charge = charge
+            self.assertEqual(game.aim_preview(), baseline)
+        for state in ('stroke', 'rolling', 'finished'):
+            game.state = state
+            self.assertEqual(game.aim_preview(), ((), ()))
 
     def test_cut_shot_direction_matches_guide_at_different_frame_rates(self):
         for fps in (30, 60, 144):

@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import diag
 from .config import CREDIT, REPOSITORY_URL
 from .art import credit_layout, charge_art, cue_art, guide_art, pocket_art, pocket_particles, table_art, white_art
+from .art import round_actions_art, round_actions_layout
 from .balls import MAX_BALLS, ball_summary, fill_sources, priority_order
 from .display import dpi_context, monitors, window_dpi
 from .shell import ShellDesktop
@@ -338,6 +339,11 @@ class BilliardsOverlay:
         self.credit_pressed = None
         self.credit_was_down = True
         self.link_requests = queue.SimpleQueue()
+        self.round_actions = queue.SimpleQueue()
+        self.round_actions_key = None
+        self.round_action_hover = None
+        self.round_action_pressed = None
+        self.round_action_was_down = True
         self.luma_map = None
         # Set from the UI thread, applied by the animation thread inside draw().
         self.want_hidden = False
@@ -647,6 +653,7 @@ class BilliardsOverlay:
                 win32gui.ShowWindow(rail, shown)
             # Forget what each layer last showed so the next frames re-show cue, guide and white ball.
             self.cue_key = self.guide_key = self.charge_key = self.white_position = None
+            self.round_actions_key = None
             self.drawn = [None] * len(self.items)
             self.pointer = TablePointer()
             self.stack_table_windows()
@@ -707,6 +714,7 @@ class BilliardsOverlay:
         self.draw_table()
         self.draw_guide()
         self.draw_charge()
+        self.draw_round_actions()
 
     def read_pointer(self, now):
         """Suspend only an access-denied cursor read; unrelated failures stay visible."""
@@ -724,6 +732,8 @@ class BilliardsOverlay:
                 self.table.charge = 0.
                 self.credit_pressed = None
                 self.credit_was_down = True
+                self.round_action_pressed = None
+                self.round_action_was_down = True
                 diag.log('cursor access denied; round paused and pending input cancelled')
             return None
         if self.input_suspended:
@@ -767,7 +777,25 @@ class BilliardsOverlay:
         else:
             over_credit = False
         self.update_credit_pointer(x, y, down, over_credit)
+        self.update_round_action_pointer(x, y, down, on_desktop)
         self.pointer.update(self.table, now, x, y, down, on_desktop)
+
+    def update_round_action_pointer(self, x, y, down, on_desktop):
+        serial = self.table.round_serial
+        target = None
+        if self.table.state == 'finished' and on_desktop:
+            _, rows = round_actions_layout(self.table)
+            target = next((action for action, _, (l, t, r, b) in rows if l <= x < r and t <= y < b), None)
+        self.round_action_hover = target
+        if down and not self.round_action_was_down:
+            self.round_action_pressed = (serial, target) if target else None
+        elif not down and self.round_action_was_down:
+            if target and self.round_action_pressed == (serial, target):
+                self.round_actions.put((serial, target))
+            self.round_action_pressed = None
+        if not target:
+            self.round_action_pressed = None
+        self.round_action_was_down = down
 
     def update_credit_pointer(self, x, y, down, on_desktop):
         target = next((url for (l, t, r, b), url in self.credit_links
@@ -900,7 +928,7 @@ class BilliardsOverlay:
         self.position_layer(self.table_windows['guide'], win32con.HWND_BOTTOM)
         self.position_layer(self.table_windows['pockets'], win32con.HWND_BOTTOM)
         self.position_layer(self.table_windows['rail'], win32con.HWND_BOTTOM)
-        for part in ('white', 'cue', 'charge'):
+        for part in ('white', 'cue', 'charge', 'round_actions'):
             if part in self.table_windows:
                 self.position_layer(self.table_windows[part], win32con.HWND_TOP)
 
@@ -1007,6 +1035,21 @@ class BilliardsOverlay:
             self.position_layer(hwnd, win32con.HWND_TOP, win32con.SWP_SHOWWINDOW)
         self.charge_key = key
 
+    def draw_round_actions(self):
+        if self.table.state != 'finished':
+            if self.round_actions_key is not None:
+                win32gui.ShowWindow(self.table_windows['round_actions'], win32con.SW_HIDE)
+                self.round_actions_key = None
+            return
+        pressed = self.round_action_pressed[1] if self.round_action_pressed else None
+        key = (self.table.round_serial, self.round_action_hover, pressed)
+        if key == self.round_actions_key:
+            return
+        hwnd = self.table_windows.get('round_actions') or self.table_window('round_actions')
+        self.present(hwnd, *round_actions_art(self.table, self.round_action_hover, pressed))
+        self.position_layer(hwnd, win32con.HWND_TOP, win32con.SWP_SHOWWINDOW)
+        self.round_actions_key = key
+
     def clear_table(self):
         for hwnd in self.table_windows.values():
             surface = self.surfaces.pop(hwnd, None)
@@ -1020,6 +1063,7 @@ class BilliardsOverlay:
         self.cue_key = None
         self.charge_key = None
         self.white_position = None
+        self.round_actions_key = None
 
     def present(self, hwnd, frame, x, y):
         if not self.felt_visible and hwnd in (self.table_windows.get('cue'),

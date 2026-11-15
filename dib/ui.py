@@ -98,6 +98,11 @@ class DesktopBilliardsApp:
         self.leaderboard_dialog = None
         self.result_dialog = None
         self.result_serial = None
+        self.result_attempt_serial = None
+        self.result_attempts = 0
+        self.result_retry_at = 0.
+        self.restart_after_serial = None
+        self.round_snapshot = None
         self.result_observation = None
         self.update_results = queue.SimpleQueue()
         self.settings = self.make_settings()
@@ -343,34 +348,68 @@ class DesktopBilliardsApp:
                     pass
                 except Exception:
                     _write_log('links.log', traceback.format_exc())
-                table = overlay.table
-                state = table.state
-                minutes, seconds = divmod(table.round_seconds, 60)
-                self.time_value.set(f'{minutes:02d}:{seconds:02d}')
-                total = len(table.icons)
-                pocketed = table.pocketed_icons
-                finished = state == 'finished'
-                observation = (table.round_serial, finished)
-                if observation != self.result_observation:
-                    self.result_observation = observation
-                    diag.log(f'round observed: serial={table.round_serial} finished={finished} '
-                             f'pocketed={pocketed}/{total} toolbar_hidden={self.toolbar_hidden}')
-                self.time_title.set('总用时' if finished else '本局用时')
-                self.count_title.set('图标总数' if finished else '图标入袋')
-                self.count_value.set(str(total) if finished else f'{pocketed}/{total}')
-                self.remaining_value.set(str(total - pocketed))
-                try:
-                    self.rank.observe(table)
-                    self.update_result_dialog(overlay, table, finished)
-                except Exception:
-                    # Ranking and dialogs must never interrupt a game or the desktop restore.
-                    _write_log('rank.log', traceback.format_exc())
+                snapshots = self.runner.take_snapshots()
+                if snapshots:
+                    self.observe_snapshots(overlay, snapshots)
+                    if self.handle_round_actions(overlay, snapshots[-1]):
+                        return
             self.root.after(50, self.poll)
         except Exception as exc:
             self.fail(exc)
 
+    def handle_round_actions(self, overlay, snapshot):
+        while True:
+            try:
+                serial, action = overlay.round_actions.get_nowait()
+            except queue.Empty:
+                return False
+            if snapshot.state != 'finished' or serial != snapshot.round_serial:
+                continue
+            if self.restart_after_serial is not None and serial <= self.restart_after_serial:
+                continue
+            if action == 'again':
+                self.play_again()
+                return False
+            if action == 'quit':
+                self.close()
+                return self.closing
+
+    def observe_snapshots(self, overlay, snapshots):
+        """Use one batch for ranking and its latest immutable state for the UI."""
+        table = snapshots[-1]
+        self.round_snapshot = table
+        # Enabling ranking mid-round must not replay pre-consent start events.
+        ranked = snapshots if self.rank.serial is not None else [table]
+        rank_failed = False
+        for snapshot in ranked:
+            rank_failed = False
+            try:
+                self.rank.observe(snapshot)
+            except Exception:
+                rank_failed = True
+                _write_log('rank.log', traceback.format_exc())
+        minutes, seconds = divmod(table.round_seconds, 60)
+        self.time_value.set(f'{minutes:02d}:{seconds:02d}')
+        total, pocketed = table.icon_count, table.pocketed_icons
+        finished = table.state == 'finished'
+        observation = (table.round_serial, finished)
+        if observation != self.result_observation:
+            self.result_observation = observation
+            diag.log(f'round observed: serial={table.round_serial} finished={finished} '
+                     f'pocketed={pocketed}/{total} toolbar_hidden={self.toolbar_hidden}')
+        self.time_title.set('总用时' if finished else '本局用时')
+        self.count_title.set('图标总数' if finished else '图标入袋')
+        self.count_value.set(str(total) if finished else f'{pocketed}/{total}')
+        self.remaining_value.set(str(total - pocketed))
+        try:
+            self.update_result_dialog(overlay, table, rank_failed=rank_failed)
+        except Exception:
+            _write_log('result.log', traceback.format_exc())
+
     def restart(self):
         if self.runner and self.runner.shown.is_set():
+            if self.round_snapshot is not None:
+                self.restart_after_serial = self.round_snapshot.round_serial
             self.runner.overlay.request_restart()
 
     def toggle_guide(self):
@@ -472,37 +511,67 @@ class DesktopBilliardsApp:
                     self.show_toolbar_eye()
 
     # -- round result ------------------------------------------------------
-    def update_result_dialog(self, overlay, table, finished):
-        """Open the result window once per cleared round and keep its numbers current."""
-        if finished and self.result_serial != table.round_serial:
-            diag.log(f'result opening: serial={table.round_serial} root_state={self.root.state()}')
-            self.result_serial = table.round_serial
-            self.result_dialog = ResultDialog(self.root, {'again': self.play_again,
-                                                          'enable_rank': self.enable_rank_from_dialog,
-                                                          'leaderboard': self.show_leaderboard,
-                                                          'open_credit': self.open_credit},
-                                             config.CREDIT, config.SITE_TEXT)
-            diag.log(f'result created: serial={table.round_serial}')
+    def update_result_dialog(self, overlay, table, *, rank_failed=False):
+        """Acknowledge a round only after its result window renders successfully."""
+        serial = table.round_serial
+        finished = table.state == 'finished'
+        restarting = self.restart_after_serial is not None and serial <= self.restart_after_serial
+        if self.restart_after_serial is not None and serial > self.restart_after_serial:
+            self.restart_after_serial = None
         dialog = self.result_dialog
-        if dialog is None:
+        if dialog is not None:
+            if not dialog.alive():
+                self.result_dialog = None  # User dismissal stays acknowledged for this round.
+            elif restarting or not finished or serial != self.result_serial:
+                diag.log(f'result closing for round change: serial={serial} result_serial={self.result_serial}')
+                dialog.close()
+                self.result_dialog = None
+        if restarting or not finished:
             return
-        if not dialog.alive():
-            self.result_dialog = None
-        elif not finished or table.round_serial != self.result_serial:
-            diag.log(f'result closing for round change: finished={finished} '
-                     f'serial={table.round_serial} result_serial={self.result_serial}')
-            dialog.close()  # a new round has begun
-            self.result_dialog = None
+        if self.result_attempt_serial != serial:
+            self.result_attempt_serial = serial
+            self.result_attempts = 0
+            self.result_retry_at = 0.
+        creating = self.result_serial != serial
+        if not creating and self.result_dialog is None:
+            return  # An explicitly closed window must not reopen on the next poll.
+        now = time.monotonic()
+        if self.result_attempts >= 2 or now < self.result_retry_at:
+            return
+        try:
+            rank_view = ({'phase': 'error', 'message': '排名暂时无法查询，本局成绩已显示。'}
+                         if rank_failed else self.rank.view(table))
+        except Exception:
+            _write_log('rank.log', traceback.format_exc())
+            rank_view = {'phase': 'error', 'message': '排名暂时无法查询，本局成绩已显示。'}
+        view = {
+            'time': format_duration(table.play_ms),
+            'average': f'{average_seconds(table.play_ms, table.icon_count):.2f}',
+            'balls': str(table.icon_count), 'shots': str(table.shots),
+            'note': overlay.ball_info, 'rank': rank_view,
+        }
+        dialog = self.result_dialog
+        try:
+            if creating:
+                diag.log(f'result opening: serial={serial} root_state={self.root.state()}')
+                dialog = ResultDialog(self.root, {'again': self.play_again,
+                                                 'enable_rank': self.enable_rank_from_dialog,
+                                                 'leaderboard': self.show_leaderboard,
+                                                 'open_credit': self.open_credit},
+                                      config.CREDIT, config.SITE_TEXT)
+            dialog.update(view)
+        except Exception:
+            self.result_attempts += 1
+            self.result_retry_at = now + 1.
+            if creating and dialog is not None:
+                dialog.close()
+            raise
         else:
-            count = len(table.icons)
-            dialog.update({
-                'time': format_duration(table.play_ms),
-                'average': f'{average_seconds(table.play_ms, count):.2f}',
-                'balls': str(count),
-                'shots': str(table.shots),
-                'note': overlay.ball_info,
-                'rank': self.rank.view(table),
-            })
+            if creating:
+                self.result_dialog = dialog
+                self.result_serial = serial
+                diag.log(f'result created and rendered: serial={serial}')
+            self.result_attempts = 0
 
     @staticmethod
     def open_credit():

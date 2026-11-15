@@ -211,6 +211,13 @@ class ResultDialog:
         self.folder = None
         self.root = root
         self.top = tk.Toplevel(root)
+        try:
+            self._build(root, callbacks)
+        except Exception:
+            self.close()
+            raise
+
+    def _build(self, root, callbacks):
         top = self.top
         top.title('清台完成')
         for event in ('<Map>', '<Unmap>', '<Destroy>'):
@@ -290,15 +297,20 @@ class ResultDialog:
     def update(self, view):
         if not self.alive() or view == self.last:
             return
-        self.last = view
-        self.image = card.render_card(view, credit=self.credit, site=self.site)
+        image = card.render_card(view, credit=self.credit, site=self.site)
+        previous, previous_image = self.last, self.image
+        self.last, self.image = view, image
+        try:
+            if view['rank']['phase'] == 'off':
+                self.offer.pack(side='right')
+            else:
+                self.offer.pack_forget()
+            self._layout_status()
+        except Exception:
+            self.last, self.image = previous, previous_image
+            raise
         diag.log(f'result rendered: rank_phase={view["rank"]["phase"]} '
                  f'window_state={self.top.state()} visible={self.top.winfo_viewable()}')
-        if view['rank']['phase'] == 'off':
-            self.offer.pack(side='right')
-        else:
-            self.offer.pack_forget()
-        self._layout_status()
 
     def _layout_status(self):
         if self.feedback_text.get() or (self.last and self.last['rank']['phase'] == 'off'):
