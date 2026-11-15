@@ -30,6 +30,7 @@ from .rank import RankApi, RankController, RankSettings, average_seconds, data_d
 from .runner import BilliardsRunner
 from .shell import LayoutSession, ShellDesktop
 from .update import fetch_update, release_entries
+from .white_ball import WhiteBallDialog, read_texture
 
 
 RANK_CONSENT = (
@@ -106,6 +107,14 @@ class DesktopBilliardsApp:
         self.result_observation = None
         self.update_results = queue.SimpleQueue()
         self.settings = self.make_settings()
+        self.white_ball_dialog = None
+        self.white_texture = None
+        self.white_texture_path = self.settings.path.parent / 'white-ball.png'
+        if self.white_texture_path.exists():
+            try:
+                self.white_texture = read_texture(self.white_texture_path)
+            except (OSError, ValueError, Image.DecompressionBombError):
+                _write_log('white-ball.log', traceback.format_exc())
         self.felt_enabled = bool(self.settings.get('felt', True))
         self.stealth_announced = False
         self.toolbar_hidden = False
@@ -118,6 +127,7 @@ class DesktopBilliardsApp:
             'check_updates': lambda: self.check_updates(manual=True), 'donate': self.show_donation,
             'quit': self.close, 'toggle_felt': self.toggle_felt,
             'leaderboard': self.show_leaderboard,
+            'white_ball': self.show_white_ball,
             'open_credit': lambda: webbrowser.open(config.DOUYIN_URL),
         }, config.DOUYIN_CREDIT)
         publish_version(root, config.VERSION)
@@ -230,6 +240,18 @@ class DesktopBilliardsApp:
         ttk.Button(body, text='关闭', command=dialog.destroy, style='Table.TButton').pack(pady=(10, 0))
         dialog.bind('<Escape>', lambda event: dialog.destroy())
 
+    def show_white_ball(self):
+        if self.white_ball_dialog is not None and self.white_ball_dialog.window.winfo_exists():
+            self.white_ball_dialog.window.lift()
+            return
+        self.white_ball_dialog = WhiteBallDialog(self.root, self.white_texture_path,
+                                                self.white_texture, self.set_white_texture)
+
+    def set_white_texture(self, texture):
+        self.white_texture = texture
+        if self.runner is not None:
+            self.runner.overlay.request_white_texture(texture)
+
     def check_updates(self, manual=False):
         if self.closing or not self.panel.is_enabled('update'):
             return
@@ -289,6 +311,7 @@ class DesktopBilliardsApp:
                 overlay = BilliardsOverlay(desktop, items)
                 overlay.guide_enabled = self.guide_enabled
                 overlay.want_felt = self.felt_enabled
+                overlay.request_white_texture(self.white_texture)
             self.watchdog = self.spawn_watchdog()
             self.runner = BilliardsRunner(overlay)
             self.runner.start()

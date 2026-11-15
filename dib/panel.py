@@ -107,7 +107,7 @@ def configure_styles(root):
 
 
 class MainPanel:
-    """A draggable, borderless row of round statistics and explicit actions."""
+    """A draggable toolbar with functions above the current round and its actions."""
 
     DEFAULT_LOOK = {
         'guide': {'text': '辅助线 开', 'kind': 'on'},
@@ -130,42 +130,69 @@ class MainPanel:
         self.count_value = tk.StringVar(root, value='—')
         self.remaining_title = tk.StringVar(root, value='剩余')
         self.remaining_value = tk.StringVar(root, value='—')
-        self.shell = tk.Frame(root, bg=BG, padx=6, pady=5)
+        self.shell = tk.Frame(root, bg=BG, padx=10, pady=8)
         self.shell.pack(fill='both', expand=True)
-        grip = tk.Label(self.shell, text='⋮⋮', font=(FONT, 11), fg=MUTED, bg=BG, padx=6, cursor='fleur')
-        grip.pack(side='left')
+        self.shell.columnconfigure(1, weight=1)
+        grip = tk.Label(self.shell, text='⋮⋮', font=(FONT, 11), fg=MUTED, bg=BG, cursor='fleur')
+        grip.grid(row=0, column=0, rowspan=3, padx=(0, 12), sticky='ns')
         self._draggable(grip)
         self._draggable(self.shell)
+        functions = tk.Frame(self.shell, bg=BG)
+        functions.grid(row=0, column=1, sticky='ew')
+        groups = []
+        for items in (
+                (('guide', '辅助线', 'toggle_guide', 'on'),
+                 ('felt', '台面', 'toggle_felt', 'ghost'),
+                 ('white', '白球外观', 'white_ball', 'ghost')),
+                (('rank', '排名', 'toggle_rank', 'off'),
+                 ('leaderboard', '排行榜', 'leaderboard', 'soft')),
+                (('update', '检查更新', 'check_updates', 'ghost'),
+                 ('donate', '打赏', 'donate', 'gold'))):
+            group = tk.Frame(functions, bg=BG)
+            groups.append(group)
+            self._draggable(group)
+            for key, text, command, kind in items:
+                look = self.look.get(key, {})
+                pill = Pill(group, look.get('text', text), callbacks.get(command),
+                            look.get('kind', kind), padx=8, pady=4)
+                pill.set(enabled=look.get('enabled', True))
+                pill.pack(side='left', padx=(0, 4))
+                self.pills[key] = pill
+        if credit:
+            link = tk.Label(functions, text=credit, font=(FONT, 8), fg=MUTED, bg=BG, cursor='hand2')
+            link.bind('<ButtonRelease-1>', lambda event: callbacks['open_credit']())
+            groups.append(link)
+        root.update_idletasks()
+        monitor = win32api.MonitorFromPoint((root.winfo_rootx(), root.winfo_rooty()),
+                                           win32con.MONITOR_DEFAULTTONEAREST)
+        left, _, right, _ = win32api.GetMonitorInfo(monitor)['Work']
+        available = max(1, right - left - 64)
+        row = column = used = 0
+        for group in groups:
+            width = group.winfo_reqwidth() + 12
+            if used and used + width > available:
+                row, column, used = row + 1, 0, 0
+            group.grid(row=row, column=column, sticky='w', padx=(0, 12), pady=(0, 2))
+            column += 1
+            used += width
+        separator = tk.Frame(self.shell, bg='#263d36', height=1)
+        separator.grid(row=1, column=1, sticky='ew', pady=7)
+        stats = tk.Frame(self.shell, bg=BG)
+        stats.grid(row=2, column=1, sticky='ew')
+        self._draggable(stats)
         for title, value in ((self.time_title, self.time_value), (self.count_title, self.count_value),
                              (self.remaining_title, self.remaining_value)):
-            box = tk.Frame(self.shell, bg=BG, padx=7)
-            box.pack(side='left')
+            box = tk.Frame(stats, bg=BG)
+            box.pack(side='left', padx=(0, 14))
             self._draggable(box)
             for variable, color, font in ((title, MUTED, (FONT, 8)), (value, TEXT, (NUMBERS, 11))):
                 label = tk.Label(box, textvariable=variable, font=font, fg=color, bg=BG)
-                label.pack(side='left', padx=(0, 4))
+                label.pack(side='left', padx=(0, 5))
                 self._draggable(label)
-        for key, text, command, kind, bold in (
-                ('restart', '重新开始', callbacks['restart'], 'primary', True),
-                ('guide', '辅助线', callbacks['toggle_guide'], 'on', False),
-                ('rank', '排名', callbacks['toggle_rank'], 'off', False),
-                ('leaderboard', '排行榜', callbacks['leaderboard'], 'soft', False),
-                # ('hide', '隐藏', None, 'soft', False),
-                ('felt', '台面', callbacks['toggle_felt'], 'ghost', False),
-                ('update', '检查更新', callbacks['check_updates'], 'ghost', False),
-                ('donate', '打赏', callbacks['donate'], 'gold', False)):
-            look = self.look.get(key, {})
-            pill = Pill(self.shell, look.get('text', text), command, look.get('kind', kind),
-                        bold=bold, padx=8, pady=4)
-            pill.set(enabled=look.get('enabled', True))
-            pill.pack(side='left', padx=(4, 0))
-            self.pills[key] = pill
-        if credit:
-            link = tk.Label(self.shell, text=credit, font=(FONT, 8), fg=MUTED, bg=BG, padx=8, cursor='hand2')
-            link.pack(side='left')
-            link.bind('<ButtonRelease-1>', lambda event: callbacks['open_credit']())
-        self.pills['quit'] = Pill(self.shell, '退出', callbacks['quit'], 'soft', padx=8, pady=4)
-        self.pills['quit'].pack(side='left', padx=(4, 0))
+        self.pills['quit'] = Pill(stats, '退出', callbacks['quit'], 'soft', padx=10, pady=4)
+        self.pills['quit'].pack(side='right')
+        self.pills['restart'] = Pill(stats, '重新开始', callbacks['restart'], 'primary', bold=True, padx=10, pady=4)
+        self.pills['restart'].pack(side='right', padx=(0, 8))
         root.update_idletasks()
 
     def _draggable(self, widget):

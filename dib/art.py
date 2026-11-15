@@ -258,11 +258,12 @@ def guide_art(lines, circles=(), luma=None):
     return frame.reduce(s), left, top
 
 
-def white_art(radius, shaded=False):
+def white_art(radius, shaded=False, texture=None):
     """Draw the cue ball, optionally shaded as a lit sphere."""
     side = max(3, math.ceil(radius * 2) + 4)
     frame = Image.new('RGBA', (side * 3, side * 3))
-    if shaded:
+    if shaded or texture is not None:
+        texture_pixels = texture.load() if texture is not None else None
         center = (side * 3 - 1) / 2
         r = max(1, radius * 3)
         pixels = []
@@ -278,7 +279,14 @@ def white_art(radius, shaded=False):
                 light = max(0, -.46 * x - .49 * y + .74 * z)
                 shine = math.exp(-((x + .34) ** 2 + (y + .40) ** 2) / .038)
                 value = min(255, round(157 + 96 * light + 32 * shine))
-                pixels.append((value, min(255, value + 4), min(255, value + 9), 255))
+                if texture_pixels is None:
+                    pixels.append((value, min(255, value + 4), min(255, value + 9), 255))
+                else:
+                    tx = round((x + 1) * .5 * (texture.width - 1))
+                    ty = round((y + 1) * .5 * (texture.height - 1))
+                    color = texture_pixels[tx, ty]
+                    factor = .78 + .22 * light
+                    pixels.append((*[min(255, round(c * factor + 20 * shine)) for c in color[:3]], 255))
         frame.putdata(pixels)
         return frame.resize((side, side), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(frame)

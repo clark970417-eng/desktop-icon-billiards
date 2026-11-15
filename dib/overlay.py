@@ -371,6 +371,8 @@ class BilliardsOverlay:
         self.cue_key = None
         self.charge_key = None
         self.white_frame = None
+        self.white_texture = None
+        self.white_requests = queue.SimpleQueue()
         self.white_position = None
         self.parent, self.listview = desktop_listview()
         self.geometry = desktop.get_geometry()
@@ -632,6 +634,9 @@ class BilliardsOverlay:
 
     def request_restart(self):
         self.restart_requested.set()
+
+    def request_white_texture(self, texture):
+        self.white_requests.put(texture.copy() if texture is not None else None)
 
     def set_hidden(self, hidden, now):
         """Hide every game window and show the real icons again (or the reverse), pausing the round."""
@@ -946,9 +951,13 @@ class BilliardsOverlay:
             self.position_layer(hwnd, win32con.HWND_BOTTOM)
             self.table_window('guide')
         white = table.white
+        while not self.white_requests.empty():
+            self.white_texture = self.white_requests.get_nowait()
+            self.white_frame = None
         if 'white' not in self.table_windows:
             self.table_window('white')
-            self.white_frame = white_art(white.radius, shaded=True)
+        if self.white_frame is None:
+            self.white_frame = white_art(white.radius, shaded=True, texture=self.white_texture)
             self.white_position = None
         hwnd = self.table_windows['white']
         if table.white_sunk:
