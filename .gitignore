@@ -17,3 +17,9 @@ update.local.json
 
 # Website is deployed separately.
 /website/
+
+# macOS / Swift Package Manager
+.build/
+.build-*/
+.swiftpm/
+.DS_Store

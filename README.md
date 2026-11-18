@@ -4,6 +4,12 @@
 
 Windows 10 / 11 x64 · 单文件 EXE · MIT
 
+## Mac 版原型
+
+此 fork 新增可玩的 macOS 原型，使用 Swift 與 AppKit 製作，支援 macOS 13 以上。可用本機 App 或選取資料夾中的圖示當球，支援蓄力擊球、六袋球台、暫停與重新開始。遊戲只繪製圖示，不改動檔案或 Finder 桌面排列。
+
+[Mac 版操作與建置說明](macos/README.md) · 原始碼位於 `macos/`。以下內容為原作者的 Windows 版說明。
+
 ![实机画面：桌面图标排成球阵，白球瞄准库边，虚线显示反弹路线](docs/images/desktop-gameplay.jpg)
 
 ## 下载

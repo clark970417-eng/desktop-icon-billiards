@@ -1,0 +1,35 @@
+name: macOS prototype
+
+on:
+  push:
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos.yml"
+      - "assets/desktop-icon-billiards.png"
+      - "LICENSE"
+  pull_request:
+    paths:
+      - "macos/**"
+      - ".github/workflows/macos.yml"
+      - "assets/desktop-icon-billiards.png"
+      - "LICENSE"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the physics model
+        run: swift test --package-path macos
+      - name: Build a universal app
+        run: bash macos/build.sh --universal
+      - name: Upload the prototype
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopIconBilliards-macOS-prototype
+          path: macos/dist/DesktopIconBilliards-0.1.0-macOS-universal.zip
+          if-no-files-found: error
