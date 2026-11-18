@@ -25,11 +25,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test the physics model
         run: swift test --package-path macos
+      - name: Test desktop decoding and wallpaper geometry
+        run: bash macos/check-desktop.sh
+      - name: Test desktop entry and restoration with invisible fixtures
+        run: bash macos/check-session.sh
       - name: Build a universal app
         run: bash macos/build.sh --universal
       - name: Upload the prototype
         uses: actions/upload-artifact@v4
         with:
           name: DesktopIconBilliards-macOS-prototype
-          path: macos/dist/DesktopIconBilliards-0.1.0-macOS-universal.zip
+          path: macos/dist/DesktopIconBilliards-*-macOS-universal.zip
           if-no-files-found: error

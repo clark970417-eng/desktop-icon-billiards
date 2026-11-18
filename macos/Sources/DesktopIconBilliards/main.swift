@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         for (title, selector, key) in [
             ("重新開始", #selector(GameView.restart), "r"),
             ("選取圖示資料夾…", #selector(GameView.selectFolder), "o"),
-            ("切換桌面模式", #selector(GameView.toggleDesktop), "d"),
+            ("桌面開局／退出還原", #selector(GameView.toggleDesktop), "d"),
             ("顯示／隱藏輔助線", #selector(GameView.toggleGuides), "g")
         ] {
             let item = gameMenu.addItem(withTitle: title, action: selector, keyEquivalent: key)
@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Desktop Icon Billiards · Mac 原型",
-            .applicationVersion: "0.1.0",
+            .applicationVersion: "0.2.0",
             .credits: NSAttributedString(string: "原作 LXG / liuxiaogang-com\nMac fork: clark970417-eng\nMIT License\n圖示在本機讀取；無網路連線與成績上傳。")
         ])
     }
@@ -74,6 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         catch { fputs("Preview write failed\n", stderr); exit(1) }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard gameView?.desktopMode == true else { return .terminateNow }
+        gameView.restoreDesktop { sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
+    }
 }
 
 MainActor.assumeIsolated {

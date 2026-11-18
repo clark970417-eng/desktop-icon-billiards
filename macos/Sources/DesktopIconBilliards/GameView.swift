@@ -36,9 +36,27 @@ final class GameView: NSView {
     private var lastPocketCount = 0
     private var pocketFlash: TimeInterval = 0
     private var lastAccessibleState = ""
+    private var desktopBackdrop: DesktopBackdrop?
+    private var desktopItems: [DesktopItem] = []
+    private var desktopOrigins: [NSPoint] = []
+    private var desktopIconSize: CGFloat = 64
+    private var wallpaperRect = NSRect.zero
+    private var previousIconSet: IconSet?
+    private var desktopTransition: DesktopTransition?
+    private var pendingDesktopExit: (() -> Void)?
+    var isDesktopTransitioning: Bool { desktopTransition != nil }
+
+    private struct DesktopTransition {
+        let started: TimeInterval
+        let duration: TimeInterval
+        let from: [NSPoint]
+        let to: [NSPoint]
+        let fromAlpha: [CGFloat]
+        let returning: Bool
+    }
 
     override var acceptsFirstResponder: Bool { true }
-    override var isOpaque: Bool { !desktopMode }
+    override var isOpaque: Bool { true }
     var charge: Double {
         chargeStart.map { BilliardsGame.chargePower(seconds: ProcessInfo.processInfo.systemUptime - $0) } ?? 0
     }
@@ -50,7 +68,7 @@ final class GameView: NSView {
                       width: width, height: width / 2)
     }
     private var scale: CGFloat { playingRect.width / game.width }
-    private var isActiveGame: Bool { !paused && !game.isMoving && !game.isComplete }
+    private var isActiveGame: Bool { !paused && desktopTransition == nil && !game.isMoving && !game.isComplete }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -59,7 +77,7 @@ final class GameView: NSView {
         setAccessibilityRole(.group)
         setAccessibilityLabel("桌面圖示撞球遊戲。移動滑鼠瞄準，按住左鍵蓄力，放開擊球。")
         folderButton = button("選取資料夾…", action: #selector(selectFolder))
-        desktopButton = button("桌面模式", action: #selector(toggleDesktop))
+        desktopButton = button("桌面開局", action: #selector(toggleDesktop))
         restartButton = button("重新開始  R", action: #selector(restart))
         guideButton = button("輔助線：開  G", action: #selector(toggleGuides))
         pauseButton = button("暫停  Space", action: #selector(togglePause))
@@ -160,12 +178,13 @@ final class GameView: NSView {
         let now = ProcessInfo.processInfo.systemUptime
         let delta = min(1 / 15, max(0, now - lastTick))
         lastTick = now
-        if !paused { game.step(delta) }
+        if !paused && desktopTransition == nil { game.step(delta) }
+        advanceDesktopTransition(now: now)
         if game.pocketedCount > lastPocketCount { pocketFlash = now }
         lastPocketCount = game.pocketedCount
         // Timed animation stops redrawing idle tables; charging and pocket feedback remain smooth.
         if game.isMoving || chargeStart != nil || (!paused && game.shots > 0 && !game.isComplete)
-            || now - pocketFlash < 0.7 || toast != nil {
+            || now - pocketFlash < 0.7 || toast != nil || desktopTransition != nil {
             needsDisplay = true
         }
         if toast != nil && now > toastUntil { toast = nil; needsDisplay = true }
@@ -178,6 +197,7 @@ final class GameView: NSView {
         }
     }
     @objc func restart() {
+        guard desktopTransition == nil else { return }
         game.reset(iconCount: iconSet.images.count)
         paused = false
         chargeStart = nil
@@ -193,6 +213,7 @@ final class GameView: NSView {
         needsDisplay = true
     }
     @objc func togglePause() {
+        guard desktopTransition == nil else { return }
         paused.toggle()
         chargeStart = nil
         lastTick = ProcessInfo.processInfo.systemUptime
@@ -205,6 +226,7 @@ final class GameView: NSView {
         needsDisplay = true
     }
     @objc func selectFolder() {
+        guard !desktopMode, let window, window.attachedSheet == nil else { return }
         sessionWasPaused = paused
         paused = true
         chargeStart = nil
@@ -214,7 +236,6 @@ final class GameView: NSView {
         panel.allowsMultipleSelection = false
         panel.prompt = "使用圖示"
         panel.message = "選擇桌面或其他資料夾。只讀取圖示，原始檔案不會移動。"
-        guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
             self.paused = self.sessionWasPaused
@@ -236,31 +257,148 @@ final class GameView: NSView {
         }
     }
     @objc func toggleDesktop() {
-        guard let window else { return }
+        guard let window, window.attachedSheet == nil else { return }
+        if desktopMode { NSApp.terminate(nil); return }
+        guard let screen = NSScreen.screens.first else { return }
         chargeStart = nil
-        desktopMode.toggle()
-        if desktopMode {
-            savedFrame = window.frame
-            savedStyle = window.styleMask
-            window.styleMask = [.borderless, .resizable]
-            window.isOpaque = false
-            window.backgroundColor = .clear
-            window.hasShadow = false
-            window.level = .floating
-            window.setFrame(window.screen?.visibleFrame ?? window.frame, display: true)
-            desktopButton.title = "視窗模式"
-        } else {
-            window.styleMask = savedStyle ?? [.titled, .closable, .miniaturizable, .resizable]
-            window.isOpaque = true
-            window.backgroundColor = NSColor(hex: 0x10191d)
-            window.hasShadow = true
-            window.level = .normal
-            if let savedFrame { window.setFrame(savedFrame, display: true) }
-            desktopButton.title = "桌面模式"
+        let wasPaused = paused
+        paused = true
+        do {
+            // Read the wallpaper first. If unavailable, leave the desktop alone
+            // and avoid asking for unnecessary Finder access.
+            let backdrop = try DesktopBackdrop.read(screen: screen)
+            let snapshot = try DesktopSnapshot.read()
+            try startDesktop(snapshot: snapshot, backdrop: backdrop, screen: screen)
+        } catch {
+            paused = wasPaused
+            let alert = NSAlert()
+            alert.messageText = "無法開始桌面球局"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "好")
+            alert.beginSheetModal(for: window)
         }
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(self)
         needsDisplay = true
+    }
+
+    /// Overlay the usable primary desktop with wallpaper and animate only its
+    /// game copies. Finder remains untouched, including in crash/force-quit cases.
+    func startDesktop(snapshot: DesktopSnapshot, backdrop: DesktopBackdrop, screen: NSScreen,
+                      presentWindow: Bool = true) throws {
+        guard !desktopMode, let window, let primary = NSScreen.screens.first else { return }
+        let frame = screen.visibleFrame
+        let candidates = snapshot.items.compactMap { item -> (DesktopItem, NSPoint)? in
+            let point = DesktopBackdrop.viewPoint(finderPosition: item.finderPosition,
+                                                   screenFrame: frame, primaryFrame: primary.frame)
+            return NSRect(origin: .zero, size: frame.size).contains(point) ? (item, point) : nil
+        }
+        guard !candidates.isEmpty else { throw DesktopSnapshot.SnapshotError.noDesktopItems }
+        previousIconSet = iconSet
+        savedFrame = window.frame
+        savedStyle = window.styleMask
+        desktopItems = candidates.map { $0.0 }
+        desktopOrigins = candidates.map { $0.1 }
+        desktopIconSize = snapshot.iconSize
+        desktopBackdrop = backdrop
+        wallpaperRect = NSRect(x: screen.frame.minX - frame.minX, y: screen.frame.minY - frame.minY,
+                               width: screen.frame.width, height: screen.frame.height)
+        iconSet = IconSet(images: desktopItems.map(\.image), label: "你的桌面圖示 · \(desktopItems.count) 顆")
+        game.reset(iconCount: desktopItems.count)
+        lastPocketCount = 0
+        paused = false
+        desktopMode = true
+        window.styleMask = [.borderless]
+        window.isOpaque = true
+        window.backgroundColor = .black
+        window.hasShadow = false
+        window.level = .floating
+        window.setFrame(frame, display: true)
+        layoutSubtreeIfNeeded()
+        desktopButton.title = "退出還原"
+        folderButton.isEnabled = false
+        pauseButton.title = "暫停  Space"
+        aim = Vector(620, 250)
+        let targets = game.balls.filter { !$0.isCue }.map { screenPoint($0.position) }
+        desktopTransition = DesktopTransition(started: ProcessInfo.processInfo.systemUptime, duration: 0.85,
+            from: desktopOrigins, to: targets, fromAlpha: Array(repeating: 1, count: targets.count), returning: false)
+        if presentWindow { window.makeKeyAndOrderFront(nil) }
+        window.makeFirstResponder(self)
+        lastTick = ProcessInfo.processInfo.systemUptime
+        needsDisplay = true
+    }
+
+    func restoreDesktop(completion: (() -> Void)? = nil) {
+        guard desktopMode else { completion?(); return }
+        if let completion { pendingDesktopExit = completion }
+        if desktopTransition?.returning == true { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        let positions = desktopTransition.map { transitionPositions($0, now: now) }
+            ?? game.balls.filter { !$0.isCue }.map { screenPoint($0.position) }
+        let alphas: [CGFloat] = desktopTransition == nil
+            ? game.balls.filter { !$0.isCue }.map { $0.pocketed ? 0 : 1 }
+            : Array(repeating: 1, count: positions.count)
+        chargeStart = nil
+        paused = true
+        desktopTransition = DesktopTransition(started: now, duration: 0.55,
+            from: positions, to: desktopOrigins, fromAlpha: alphas, returning: true)
+        needsDisplay = true
+    }
+
+    private func advanceDesktopTransition(now: TimeInterval) {
+        guard let transition = desktopTransition, now - transition.started >= transition.duration else { return }
+        desktopTransition = nil
+        if transition.returning {
+            desktopMode = false
+            desktopBackdrop = nil
+            desktopItems = []
+            desktopOrigins = []
+            if let previousIconSet { iconSet = previousIconSet }
+            previousIconSet = nil
+            if let window {
+                window.styleMask = savedStyle ?? [.titled, .closable, .miniaturizable, .resizable]
+                window.backgroundColor = NSColor(hex: 0x10191d)
+                window.hasShadow = true
+                window.level = .normal
+                if let savedFrame { window.setFrame(savedFrame, display: true) }
+                window.makeFirstResponder(self)
+            }
+            desktopButton.title = "桌面開局"
+            folderButton.isEnabled = true
+            restart()
+            let completion = pendingDesktopExit
+            pendingDesktopExit = nil
+            completion?()
+        } else {
+            paused = false
+            lastTick = now
+        }
+        needsDisplay = true
+    }
+
+    private func transitionPositions(_ transition: DesktopTransition, now: TimeInterval) -> [NSPoint] {
+        let progress = min(1, max(0, (now - transition.started) / transition.duration))
+        let eased = progress * progress * (3 - 2 * progress)
+        return zip(transition.from, transition.to).enumerated().map { index, pair in
+            let arc = sin(progress * .pi) * CGFloat(30 + index % 4 * 12)
+            return NSPoint(x: pair.0.x + (pair.1.x - pair.0.x) * eased,
+                           y: pair.0.y + (pair.1.y - pair.0.y) * eased + arc)
+        }
+    }
+
+    private func drawDesktopTransition(_ transition: DesktopTransition, now: TimeInterval) {
+        let progress = min(1, max(0, (now - transition.started) / transition.duration))
+        let eased = CGFloat(progress * progress * (3 - 2 * progress))
+        let positions = transitionPositions(transition, now: now)
+        let ballSize = (game.balls.first?.radius ?? 22) * 2 * scale
+        let size = transition.returning ? ballSize + (desktopIconSize - ballSize) * eased
+            : desktopIconSize + (ballSize - desktopIconSize) * eased
+        for (index, point) in positions.enumerated() where index < desktopItems.count {
+            let alpha = transition.returning ? transition.fromAlpha[index] + (1 - transition.fromAlpha[index]) * eased : 1
+            let imageRect = NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
+            desktopItems[index].image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: alpha)
+            let labelAlpha = transition.returning ? eased : 1 - eased
+            text(desktopItems[index].url.lastPathComponent, at: NSPoint(x: point.x, y: point.y - size / 2 - 18),
+                 size: 11, color: .white.withAlphaComponent(labelAlpha), centered: true)
+        }
     }
     private func showToast(_ message: String) {
         toast = message
@@ -284,7 +422,7 @@ final class GameView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let now = ProcessInfo.processInfo.systemUptime
-        if desktopMode { NSColor.clear.setFill(); bounds.fill(using: .copy) }
+        if desktopMode, let desktopBackdrop { desktopBackdrop.draw(in: wallpaperRect) }
         else {
             NSColor(hex: 0x0e181c).setFill(); bounds.fill()
             NSGradient(starting: NSColor(hex: 0x172a2c), ending: NSColor(hex: 0x0b141a))?.draw(in: bounds, angle: -70)
@@ -305,9 +443,11 @@ final class GameView: NSView {
              size: 13, color: NSColor(hex: 0xafe4b7), weight: .medium, mono: true)
         drawTable(now: now)
         drawFooter()
-        if paused { drawCard(title: "暫停一下", subtitle: "按 Space 或「繼續」回到球局") }
-        else if game.isComplete { drawCard(title: "漂亮，清台了！", subtitle: "\(game.shots) 桿 · \(minutes) 分 \(seconds) 秒   /   按 R 再來一局") }
-        else if game.needsCuePlacement { drawCard(title: "白球自由球", subtitle: "點擊球桌上的空位，重新放置白球") }
+        if desktopTransition == nil {
+            if paused { drawCard(title: "暫停一下", subtitle: "按 Space 或「繼續」回到球局") }
+            else if game.isComplete { drawCard(title: "漂亮，清台了！", subtitle: "\(game.shots) 桿 · \(minutes) 分 \(seconds) 秒   /   按 R 再來一局") }
+            else if game.needsCuePlacement { drawCard(title: "白球自由球", subtitle: "點擊球桌上的空位，重新放置白球") }
+        }
         if let toast {
             rounded(NSRect(x: bounds.midX - 270, y: 114, width: 540, height: 34), radius: 10, fill: NSColor(hex: 0x29433b))
             text(toast, at: NSPoint(x: bounds.midX, y: 123), size: 12, color: .white, centered: true)
@@ -355,7 +495,11 @@ final class GameView: NSView {
         text("DESKTOP ICON BILLIARDS", at: NSPoint(x: rect.midX, y: rect.midY + 65), size: 12,
              color: NSColor(hex: 0xe1efd5, alpha: desktopMode ? 0.4 : 0.12), weight: .semibold, centered: true)
         if guides && isActiveGame && !game.needsCuePlacement { drawGuide() }
-        for ball in game.balls where !ball.pocketed { drawBall(ball) }
+        if let desktopTransition {
+            drawDesktopTransition(desktopTransition, now: now)
+        } else {
+            for ball in game.balls where !ball.pocketed { drawBall(ball) }
+        }
         if now - pocketFlash < 0.65 && game.pocketedCount > 0 {
             text("+1 入袋", at: NSPoint(x: rect.midX, y: rect.maxY + 28), size: 13,
                  color: NSColor(hex: 0xb8efaa, alpha: 1 - (now - pocketFlash) / 0.65), weight: .semibold, centered: true)
@@ -424,7 +568,12 @@ final class GameView: NSView {
     private func drawFooter() {
         rounded(NSRect(x: 16, y: 16, width: bounds.width - 32, height: 101), radius: 16,
                 fill: NSColor(hex: 0x142327, alpha: desktopMode ? 0.95 : 0.75), stroke: NSColor(hex: 0x48665f, alpha: 0.3))
-        let status = paused ? "已暫停" : game.isComplete ? "清台完成" : game.needsCuePlacement ? "點擊空位放置白球" : game.isMoving ? "球還在滾動…" : chargeStart != nil ? "放開左鍵，擊球！" : "移動滑鼠瞄準 · 按住左鍵蓄力 · 放開擊球"
+        let status: String
+        if let desktopTransition {
+            status = desktopTransition.returning ? "圖示正在回到桌面原位…" : "你的桌面圖示，準備開球…"
+        } else {
+            status = paused ? "已暫停" : game.isComplete ? "清台完成" : game.needsCuePlacement ? "點擊空位放置白球" : game.isMoving ? "球還在滾動…" : chargeStart != nil ? "放開左鍵，擊球！" : "移動滑鼠瞄準 · 按住左鍵蓄力 · 放開擊球"
+        }
         text(status, at: NSPoint(x: 34, y: 48), size: 13, color: NSColor(hex: 0xe2eadc), weight: .medium)
         text("原作 LXG / liuxiaogang-com · MIT    |    Mac 原型 · Esc 離開", at: NSPoint(x: 34, y: 28), size: 10,
              color: NSColor(hex: 0x91a8a1))

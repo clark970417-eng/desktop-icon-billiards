@@ -5,6 +5,7 @@ MACOS_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$MACOS_DIR/.." && pwd)"
 DIST_DIR="$MACOS_DIR/dist"
 APP_PATH="$DIST_DIR/Desktop Icon Billiards.app"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$MACOS_DIR/Info.plist")"
 ARCH_LABEL="$(uname -m)"
 UNIVERSAL=false
 
@@ -60,8 +61,8 @@ done
 iconutil -c icns "$ICONSET_DIR" -o "$APP_PATH/Contents/Resources/AppIcon.icns"
 
 # Ad-hoc signing supports local testing; this is not Developer ID notarization.
-codesign --force --sign - "$APP_PATH"
+codesign --force --sign - --entitlements "$MACOS_DIR/Entitlements.plist" "$APP_PATH"
 codesign --verify --strict "$APP_PATH"
-ZIP_PATH="$DIST_DIR/DesktopIconBilliards-0.1.0-macOS-$ARCH_LABEL.zip"
+ZIP_PATH="$DIST_DIR/DesktopIconBilliards-$VERSION-macOS-$ARCH_LABEL.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 printf '\nApp: %s\nArchive: %s\n' "$APP_PATH" "$ZIP_PATH"
