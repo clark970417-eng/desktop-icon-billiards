@@ -18,6 +18,7 @@ final class GameView: NSView {
     private var guides = true
     private var aim = Vector(620, 250)
     private var chargeStart: TimeInterval?
+    private var chargeOrigin: NSPoint?
     private var lastTick = ProcessInfo.processInfo.systemUptime
     private var timer: Timer?
     private var tracking: NSTrackingArea?
@@ -46,6 +47,87 @@ final class GameView: NSView {
     private var pendingDesktopExit: (() -> Void)?
     private let artworkLoader = ArtworkLoader()
     private var scopedSourceFolder: URL?
+    private(set) var language = AppLanguage.saved
+    var onLanguageChange: ((AppLanguage) -> Void)?
+    private var languagePopup: NSPopUpButton!
+    private var activeFolderPanel: NSOpenPanel?
+    private var activeAlert: NSAlert?
+    private var activeAlertError: Error?
+    private var cueButton: NSButton!
+    private var resultsButton: NSButton!
+    private var rankingButton: NSButton!
+    private var leaderboardButton: NSButton!
+    private var updateButton: NSButton!
+    private var donateButton: NSButton!
+    private var creditButton: NSButton!
+    private let informationController = InformationController()
+    private lazy var updateController = MacUpdateController(language:language)
+    private var toolbarPosition: NSPoint?
+    private var toolbarDragOffset: NSPoint?
+    private var windowBackdrop: DesktopBackdrop?
+    private var tableButton: NSButton!
+    private var exitButton: NSButton!
+    private var eyeButton: NSButton!
+    private var tableVisible = true
+    private var headerCollapsed = false
+    private var pointerNearControlsAt = ProcessInfo.processInfo.systemUptime
+    private var shiftHeld = false
+    private var globalExitAvailable = true
+    private var lastCompactLayout: Bool?
+    private var cueImage = CueAppearanceController.loadSaved()
+    private lazy var cueArtwork = BallArtwork.cue(texture:cueImage)
+    private lazy var cueController = CueAppearanceController(language: language) { [weak self] image in
+        self?.cueImage = image; self?.cueArtwork = BallArtwork.cue(texture:image); self?.needsDisplay = true
+    }
+    private let resultsController = ResultsController()
+    private let rankingOverride: RankingController?
+    private lazy var rankingController = rankingOverride ?? RankingController(language: language)
+    private var lastResult: RoundResult?
+    private var resultReadyAt: TimeInterval?
+    private var completedRoundHandled = false
+    private var previousPocketed: Set<Int> = []
+    private var sinkAnimations: [SinkAnimation] = []
+    private var lastIdleDraw: TimeInterval = 0
+    private var desktopOriginalCount = 0
+    private var desktopUniqueCount = 0
+    private struct SinkAnimation { let ball: Ball; let started: TimeInterval; let pocket: Vector }
+    private let trashIcon = NSWorkspace.shared.icon(forFile: NSHomeDirectory() + "/.Trash")
+
+    private var functionGroups: [[NSButton]] {
+        [[guideButton, tableButton, cueButton], [rankingButton, leaderboardButton],
+         [updateButton, donateButton], [creditButton]]
+    }
+    private var controls: [NSView] { functionGroups.flatMap { $0 } + [restartButton, exitButton] }
+    private var extraControls: [NSView] { [folderButton, desktopButton, pauseButton, resultsButton, languagePopup] }
+    private var compactLayout: Bool { bounds.width < 600 }
+    private var toolbarLayout: WinToolbarLayout {
+        WinToolbarLayout(availableWidth: max(1,bounds.width-32),
+            groups: functionGroups.map { $0.map { $0.intrinsicContentSize.width } },
+            actions: [restartButton,exitButton].map { $0!.intrinsicContentSize.width },
+            statsWidth: statsWidth)
+    }
+    private var toolbarStats: [(String,String)] {
+        [(l("本局用时", "Time"),formattedTime(game.elapsed)),
+         (l("图标入袋", "Pocketed"),"\(game.pocketedCount)/\(game.iconCount)"),
+         (l("剩余", "Left"),"\(game.iconCount-game.pocketedCount)")]
+    }
+    private var statsWidth: CGFloat {
+        toolbarStats.enumerated().reduce(0) { total,item in
+            let (index,(title,value)) = item
+            let sample = index == 0 ? formattedTime(max(3600,game.elapsed)) : value
+            let labelWidth = (title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:11)]).width
+            let valueWidth = (sample as NSString).size(withAttributes:[.font:NSFont.monospacedDigitSystemFont(ofSize:14,weight:.semibold)]).width
+            return total + (bounds.width < 500 ? max(labelWidth,valueWidth)+16 : labelWidth+valueWidth+22)
+        }
+    }
+    private var headerRect: NSRect {
+        let size = toolbarLayout.size
+        let origin = toolbarPosition ?? NSPoint(x:(bounds.width-size.width)/2,y:bounds.height-size.height-16)
+        return WindowGeometry.clamp(NSRect(origin:origin,size:size),to:bounds.insetBy(dx:8,dy:8))
+    }
+    private var headerHeight: CGFloat { toolbarLayout.size.height+24 }
+    private var footerHeight: CGFloat { 48 }
+    private func l(_ zh: String, _ en: String) -> String { language.text(zh, en) }
     var isDesktopTransitioning: Bool { desktopTransition != nil }
 
     private struct DesktopTransition {
@@ -63,26 +145,61 @@ final class GameView: NSView {
         chargeStart.map { BilliardsGame.chargePower(seconds: ProcessInfo.processInfo.systemUptime - $0) } ?? 0
     }
     var playingRect: NSRect {
-        let availableWidth = max(100, bounds.width - 112)
-        let availableHeight = max(50, bounds.height - 292)
-        let width = min(availableWidth, availableHeight * 2)
-        return NSRect(x: (bounds.width - width) / 2, y: 142 + (availableHeight - width / 2) / 2,
-                      width: width, height: width / 2)
+        // Fit all six visible hole extents as well as the 2:1 playing surface.
+        let outer = NSRect(x:24,y:footerHeight+12,width:max(1,bounds.width-48),
+            height:max(1,bounds.height-headerHeight-footerHeight-36))
+        let radius = game.pocketRadius
+        let fit = min(outer.width/(game.width+2*radius),outer.height/(game.height+2*radius))
+        let width = game.width*fit, height = game.height*fit
+        return NSRect(x:outer.midX-width/2,y:outer.midY-height/2,width:width,height:height)
     }
+
     private var scale: CGFloat { playingRect.width / game.width }
     private var isActiveGame: Bool { !paused && desktopTransition == nil && !game.isMoving && !game.isComplete }
 
-    override init(frame: NSRect) {
+    override convenience init(frame: NSRect) { self.init(frame: frame, ranking: nil) }
+    init(frame: NSRect, ranking: RankingController?) {
+        rankingOverride = ranking
         super.init(frame: frame)
         wantsLayer = true
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("桌面圖示撞球遊戲。移動滑鼠瞄準，按住左鍵蓄力，放開擊球。")
-        folderButton = button("選取資料夾…", action: #selector(selectFolder))
-        desktopButton = button("桌面開局", action: #selector(toggleDesktop))
-        restartButton = button("重新開始  R", action: #selector(restart))
-        guideButton = button("輔助線：開  G", action: #selector(toggleGuides))
-        pauseButton = button("暫停  Space", action: #selector(togglePause))
+        setAccessibilityLabel("桌面图标台球游戏。移动鼠标瞄准，按住左键蓄力，放开击球。")
+        folderButton = button("选择文件夹…", action: #selector(selectFolder))
+        desktopButton = button("桌面开局", action: #selector(toggleDesktop))
+        restartButton = button("重新开始  R", action: #selector(restart))
+        guideButton = button("辅助线：开  G", action: #selector(toggleGuides))
+        pauseButton = button("暂停  Space", action: #selector(togglePause))
+        cueButton = button("", action: #selector(showCueAppearance))
+        resultsButton = button("", action: #selector(showResults))
+        rankingButton = button("", action: #selector(toggleRanking))
+        leaderboardButton = button("", action: #selector(showRanking))
+        updateButton = button("", action: #selector(checkUpdates))
+        donateButton = button("", action: #selector(showDonation))
+        creditButton = button("GitHub@liuxiaogang-com", action: #selector(openCredit))
+        tableButton = button("", action: #selector(toggleTable))
+        exitButton = button("", action: #selector(exitGame))
+        eyeButton = button("", action: #selector(showControls))
+        languagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        languagePopup.addItems(withTitles: ["简体中文", "English"])
+        languagePopup.target = self; languagePopup.action = #selector(languageChanged)
+        addSubview(languagePopup)
+        if let screen = NSScreen.main { windowBackdrop = try? DesktopBackdrop.read(screen:screen) }
+        if UserDefaults.standard.object(forKey:"toolbarOriginX") != nil {
+            toolbarPosition = NSPoint(x:UserDefaults.standard.double(forKey:"toolbarOriginX"),
+                                      y:UserDefaults.standard.double(forKey:"toolbarOriginY"))
+        }
+        applyLocalizedLabels()
+        resultsController.onAgain = { [weak self] in self?.restart() }
+        resultsController.onShowRanking = { [weak self] in self?.showRanking() }
+        rankingController.beginRound(iconCount: game.iconCount)
+        rankingController.onOutcome = { [weak self] outcome in
+            guard let self, var result = self.lastResult else { return }
+            result.globalRank = outcome.rank; result.percentile = outcome.percentile; result.bestRank = outcome.bestRank
+            result.rankingPhase = "ok"; result.newBest = outcome.isPersonalBest
+            self.lastResult = result; self.resultsController.updateResult(result)
+        }
+        updateControlVisibility()
         deactivationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -109,8 +226,8 @@ final class GameView: NSView {
     }
 
     private func button(_ title: String, action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
+        let button = WinPill(title: title, target: self, action: action)
+        button.isBordered = false
         button.controlSize = .regular
         button.font = .systemFont(ofSize: 12, weight: .medium)
         button.contentTintColor = NSColor(hex: 0xdce8e7)
@@ -119,11 +236,138 @@ final class GameView: NSView {
     }
     override func layout() {
         super.layout()
-        folderButton.frame = NSRect(x: bounds.width - 356, y: bounds.height - 69, width: 126, height: 30)
-        desktopButton.frame = NSRect(x: bounds.width - 222, y: bounds.height - 69, width: 96, height: 30)
-        restartButton.frame = NSRect(x: bounds.width - 118, y: bounds.height - 69, width: 100, height: 30)
-        guideButton.frame = NSRect(x: 32, y: 73, width: 132, height: 30)
-        pauseButton.frame = NSRect(x: 172, y: 73, width: 124, height: 30)
+        if lastCompactLayout != compactLayout { lastCompactLayout = compactLayout; applyLocalizedLabels() }
+        let panel = headerRect, geometry = toolbarLayout
+        for (view,frame) in zip(functionGroups.flatMap({ $0 }),geometry.frames) {
+            view.frame = frame.offsetBy(dx:panel.minX,dy:panel.minY)
+        }
+        for (view,frame) in zip([restartButton,exitButton],geometry.actionFrames) {
+            view?.frame = frame.offsetBy(dx:panel.minX,dy:panel.minY)
+        }
+        eyeButton?.frame = NSRect(x:panel.minX,y:panel.maxY-30,width:30,height:30)
+        extraControls.forEach { $0.isHidden = true }
+    }
+
+    func setLanguage(_ language: AppLanguage) {
+        guard self.language != language else { return }
+        self.language = language
+        UserDefaults.standard.set(language.rawValue, forKey: "interfaceLanguage")
+        applyLocalizedLabels()
+        resultsController.updateLanguage(language)
+        cueController.updateLanguage(language)
+        rankingController.updateLanguage(language)
+        informationController.updateLanguage(language)
+        updateController.updateLanguage(language)
+        activeFolderPanel?.title = l("选择图标文件夹", "Choose an icon folder")
+        activeFolderPanel?.prompt = l("使用图标", "Use icons")
+        activeFolderPanel?.message = l("只读取图标与图片缩略图，不会移动文件。", "Only icons and image previews are read; files stay in place.")
+        if let activeAlert, let error = activeAlertError {
+            activeAlert.messageText = l("无法开始桌面球局", "Could not start desktop play")
+            activeAlert.informativeText = localizedError(error)
+            activeAlert.buttons.first?.title = l("好", "OK")
+        }
+        onLanguageChange?(language)
+        // Final state-dependent labels are measured before layout and clamping.
+        needsLayout = true; layoutSubtreeIfNeeded()
+        if !desktopMode, let window,
+           let area = WindowGeometry.workArea(for: window.frame, candidates: NSScreen.screens.map(\.visibleFrame)) {
+            window.setFrame(WindowGeometry.clamp(window.frame, to: area), display: true)
+        }
+        lastAccessibleState = ""; needsDisplay = true
+    }
+    @objc private func languageChanged() { setLanguage(languagePopup.indexOfSelectedItem == 1 ? .en : .zhHans) }
+    private func applyLocalizedLabels() {
+        folderButton.title = l("选择文件夹…", "Choose folder…")
+        desktopButton.title = desktopMode ? l("退出还原", "Restore & exit") : l("桌面开局", "Play desktop")
+        restartButton.title = l("重新开始", "Restart")
+        guideButton.title = guides ? l("辅助线 开", "Guide on") : l("辅助线 关", "Guide off")
+        pauseButton.title = paused ? l("继续", "Resume") : l("暂停", "Pause")
+        cueButton.title = l("白球外观", "Cue appearance")
+        resultsButton.title = l("成绩卡", "Result card")
+        rankingButton.title = l("排名", "Ranking")
+        leaderboardButton.title = l("排行榜", "Leaderboard")
+        updateButton.title = l("检查更新", "Check updates")
+        donateButton.title = l("打赏", "Donate")
+        tableButton.title = tableVisible ? l("台面 开", "Table on") : l("台面 关", "Table off")
+        exitButton.title = l("退出", "Exit")
+        eyeButton.title = "◉"
+        controls.compactMap { $0 as? NSControl }.forEach { $0.font = .systemFont(ofSize:12) }
+        creditButton.font = .systemFont(ofSize:11)
+        (guideButton as? WinPill)?.kind = guides ? .on : .off
+        (rankingButton as? WinPill)?.kind = rankingController.isEnabled ? .on : .off
+        (leaderboardButton as? WinPill)?.kind = .soft
+        (donateButton as? WinPill)?.kind = .gold
+        (restartButton as? WinPill)?.kind = .primary
+        (exitButton as? WinPill)?.kind = .soft
+        languagePopup.selectItem(at: language == .en ? 1 : 0)
+        guideButton.toolTip = l("白线：首次碰撞；蓝线：白球后续；绿线：被撞图标。路线不代表滚动距离。",
+            "White: first contact. Blue: outgoing cue ball. Green: outgoing icon. Lines show direction, not travel distance.")
+        rankingButton.toolTip = l("全球排名默认关闭；点击后开启联网与匿名成绩提交。", "Ranking is off by default. Click to enable network access and anonymous score submission.")
+        exitButton.toolTip = globalExitAvailable ? l("退出并还原桌面 · ⌘⌥X", "Restore desktop and quit · ⌘⌥X") : l("退出并还原桌面 · Esc", "Restore desktop and quit · Esc")
+        eyeButton.toolTip = l("显示工具栏", "Show controls")
+        needsLayout = true
+    }
+    @objc func toggleRanking() {
+        rankingController.setEnabled(!rankingController.isEnabled); applyLocalizedLabels(); needsDisplay = true
+    }
+    @objc func checkUpdates() { chargeStart = nil; updateController.show() }
+    @objc func showDonation() { chargeStart = nil; informationController.show(language:language) }
+    @objc private func openCredit() { NSWorkspace.shared.open(URL(string:"https://github.com/liuxiaogang-com/desktop-icon-billiards")!) }
+    @objc func showCueAppearance() { chargeStart = nil; cueController.show() }
+    @objc func showRanking() { chargeStart = nil; rankingController.show() }
+    @objc func showResults() {
+        if let lastResult { resultsController.show(result: lastResult, language: language) }
+        else { showToast(l("清台后就能保存或复制成绩卡", "Clear the table to save or copy a result card.")) }
+    }
+    @objc private func exitGame() { NSApp.terminate(nil) }
+    @objc func toggleTable() {
+        tableVisible.toggle(); headerCollapsed = false
+        pointerNearControlsAt = ProcessInfo.processInfo.systemUptime
+        applyLocalizedLabels(); updateControlVisibility()
+        if !tableVisible { showToast(l("工具栏移开 1 秒收起；移到左上角可恢复，按住 Shift 显示球杆。", "Controls hide after 1 second. Hover top left to restore; hold Shift to show the cue.")) }
+        needsDisplay = true
+    }
+    @objc private func showControls() {
+        headerCollapsed = false; pointerNearControlsAt = ProcessInfo.processInfo.systemUptime
+        updateControlVisibility(); needsDisplay = true
+    }
+    private func updateControlVisibility() {
+        controls.forEach { $0.isHidden = headerCollapsed }
+        extraControls.forEach { $0.isHidden = true }
+        eyeButton.isHidden = !headerCollapsed
+    }
+    override func flagsChanged(with event: NSEvent) {
+        shiftHeld = event.modifierFlags.contains(.shift); needsDisplay = true
+    }
+    func setGlobalExitAvailable(_ available: Bool) {
+        globalExitAvailable = available; applyLocalizedLabels()
+        if !available { showToast(l("全局退出快捷键已被占用；可以按 Esc 或点击退出。", "Global exit shortcut is unavailable. Use Esc or the Exit button.")) }
+    }
+    private func finishActiveInterval() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !paused && desktopTransition == nil { game.step(max(0, now-lastTick)) }
+        lastTick = now
+    }
+    func suspendForSystemChange() {
+        finishActiveInterval()
+        toolbarDragOffset = nil
+        chargeStart = nil; paused = true; lastTick = ProcessInfo.processInfo.systemUptime
+        applyLocalizedLabels(); needsDisplay = true
+    }
+    func screenConfigurationChanged() {
+        suspendForSystemChange()
+        if desktopMode {
+            restoreDesktop()
+            if let transition = desktopTransition {
+                desktopTransition = DesktopTransition(started: transition.started, duration: 0,
+                    from: transition.from, to: transition.to, fromAlpha: transition.fromAlpha, returning: true)
+                advanceDesktopTransition(now: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+        if let window, let area = WindowGeometry.workArea(for: window.frame, candidates: NSScreen.screens.map(\.visibleFrame)) {
+            window.setFrame(WindowGeometry.clamp(window.frame, to: area), display: true)
+        }
+        showToast(l("屏幕配置已变更，已安全还原桌面。", "Display configuration changed. The desktop has been restored."))
     }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -156,21 +400,43 @@ final class GameView: NSView {
     }
     override func mouseMoved(with event: NSEvent) {
         aim = modelPoint(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        if headerRect.contains(point) || eyeButton.frame.contains(point) { showControls() }
         needsDisplay = true
     }
-    override func mouseDragged(with event: NSEvent) { mouseMoved(with: event) }
+    override func mouseDragged(with event: NSEvent) {
+        if let offset = toolbarDragOffset {
+            let point = convert(event.locationInWindow,from:nil)
+            toolbarPosition = NSPoint(x:point.x-offset.x,y:point.y-offset.y)
+            toolbarPosition = headerRect.origin
+            needsLayout = true; layoutSubtreeIfNeeded(); needsDisplay = true
+        } else { mouseMoved(with:event) }
+    }
     override func mouseDown(with event: NSEvent) {
+        toolbarDragOffset = nil
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
+        if !headerCollapsed && headerRect.contains(point) {
+            toolbarDragOffset = NSPoint(x:point.x-headerRect.minX,y:point.y-headerRect.minY); chargeStart = nil; return
+        }
         guard playingRect.contains(point), isActiveGame else { return }
         aim = modelPoint(point)
         if game.needsCuePlacement {
-            if !game.placeCue(at: aim) { showToast("請選擇遠離其他球與袋口的位置") }
+            if !game.placeCue(at: aim) { showToast(l("请选择远离其他球与袋口的位置", "Choose a clear position away from balls and pockets.")) }
             return
         }
         chargeStart = ProcessInfo.processInfo.systemUptime
+        chargeOrigin = point
     }
     override func mouseUp(with event: NSEvent) {
+        if toolbarDragOffset != nil {
+            toolbarDragOffset = nil
+            if let toolbarPosition {
+                UserDefaults.standard.set(toolbarPosition.x,forKey:"toolbarOriginX")
+                UserDefaults.standard.set(toolbarPosition.y,forKey:"toolbarOriginY")
+            }
+            return
+        }
         guard let started = chargeStart else { return }
         chargeStart = nil
         // Focus changes already cancel charge via notifications. Accept a valid
@@ -180,7 +446,11 @@ final class GameView: NSView {
             return
         }
         aim = modelPoint(convert(event.locationInWindow, from: nil))
-        _ = game.shoot(toward: aim, power: BilliardsGame.chargePower(seconds: ProcessInfo.processInfo.systemUptime - started))
+        let firstShot = game.shots == 0
+        if game.shoot(toward: aim, power: BilliardsGame.chargePower(seconds: ProcessInfo.processInfo.systemUptime - started)), firstShot {
+            lastTick = ProcessInfo.processInfo.systemUptime
+            rankingController.markShotStarted()
+        }
         needsDisplay = true
     }
     override func keyDown(with event: NSEvent) {
@@ -189,74 +459,113 @@ final class GameView: NSView {
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "r": restart()
         case "g": toggleGuides()
+        case "t": toggleTable()
         case " ": togglePause()
         default: super.keyDown(with: event)
         }
     }
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
-        let delta = min(1 / 15, max(0, now - lastTick))
+        (rankingButton as? WinPill)?.kind = rankingController.isEnabled ? .on : .off
+        if var result = lastResult, result.rankingPhase == "pending", rankingController.statusCode == "error" {
+            result.rankingPhase = "error"
+            result.rankingMessage = l("排名暂时无法查询，本局成绩已显示。", "Ranking is unavailable. Your result is shown.")
+            lastResult = result; resultsController.updateResult(result)
+        }
+        let delta = max(0, now - lastTick)
         lastTick = now
         if !paused && desktopTransition == nil { game.step(delta) }
         advanceDesktopTransition(now: now)
+        let pocketed = Set(game.balls.filter(\.pocketed).map(\.id))
+        for ball in game.balls where ball.pocketed && !previousPocketed.contains(ball.id) {
+            let pocket = game.pockets.min { ($0 - ball.position).length < ($1 - ball.position).length } ?? ball.position
+            sinkAnimations.append(SinkAnimation(ball: ball, started: now, pocket: pocket))
+        }
+        previousPocketed = pocketed
+        sinkAnimations.removeAll { now - $0.started > 0.62 }
         if game.pocketedCount > lastPocketCount { pocketFlash = now }
         lastPocketCount = game.pocketedCount
-        // Timed animation stops redrawing idle tables; charging and pocket feedback remain smooth.
-        if game.isMoving || chargeStart != nil || (!paused && game.shots > 0 && !game.isComplete)
-            || now - pocketFlash < 0.7 || toast != nil || desktopTransition != nil {
-            needsDisplay = true
+        if game.isComplete && !completedRoundHandled {
+            completedRoundHandled = true
+            lastResult = RoundResult(elapsed: game.elapsed, iconCount: game.iconCount, shots: game.shots,
+                rankingPhase:rankingController.isEnabled ? "pending" : "off")
+            resultReadyAt = now + 0.65
+            rankingController.submit(elapsed: game.elapsed, iconCount: game.iconCount, shots: game.shots)
+        }
+        if let at = resultReadyAt, now >= at {
+            resultReadyAt = nil
+            if NSApp.activationPolicy() != .prohibited { showResults() }
+        }
+        if !tableVisible && desktopTransition == nil {
+            let pointer = window.map { convert($0.convertPoint(fromScreen: NSEvent.mouseLocation), from: nil) }
+            if let pointer, (headerCollapsed ? eyeButton.frame : headerRect).contains(pointer) { pointerNearControlsAt = now }
+            let collapsed = now - pointerNearControlsAt > 1
+            if collapsed != headerCollapsed { headerCollapsed = collapsed; updateControlVisibility(); needsDisplay = true }
+        }
+        let animated = game.isMoving || chargeStart != nil || !sinkAnimations.isEmpty || now - pocketFlash < 0.7
+            || toast != nil || desktopTransition != nil
+        if animated || (!paused && game.shots > 0 && !game.isComplete && now - lastIdleDraw > 0.1) {
+            needsDisplay = true; lastIdleDraw = now
         }
         if toast != nil && now > toastUntil { toast = nil; needsDisplay = true }
-        let accessibleState = "桌面圖示撞球。\(game.shots) 桿，入袋 \(game.pocketedCount)/\(game.iconCount)。"
-            + (paused ? "已暫停。" : game.isMoving ? "球滾動中。" : "可以擊球。")
-            + (desktopMode ? "桌面模式。" : "視窗模式。")
-        if accessibleState != lastAccessibleState {
-            setAccessibilityLabel(accessibleState)
-            lastAccessibleState = accessibleState
-        }
+        let accessibleState = l("桌面图标台球。", "Desktop Icon Billiards. ")
+            + "\(game.shots) " + l("杆，入袋", "shots, pocketed") + " \(game.pocketedCount)/\(game.iconCount). "
+            + (paused ? l("已暂停。", "Paused. ") : game.isMoving ? l("球滚动中。", "Balls moving. ") : l("可以击球。", "Ready to shoot. "))
+            + (desktopMode ? l("桌面模式。", "Desktop mode.") : l("窗口模式。", "Window mode."))
+        if accessibleState != lastAccessibleState { setAccessibilityLabel(accessibleState); lastAccessibleState = accessibleState }
     }
+
     @objc func restart() {
         guard desktopTransition == nil else { return }
         game.reset(iconCount: iconSet.images.count)
+        previousPocketed = []; sinkAnimations = []; resultReadyAt = nil; completedRoundHandled = false
+        rankingController.beginRound(iconCount: game.iconCount)
         paused = false
         chargeStart = nil
         lastPocketCount = 0
         aim = Vector(620, 250)
-        pauseButton.title = "暫停  Space"
+        applyLocalizedLabels()
         lastTick = ProcessInfo.processInfo.systemUptime
         needsDisplay = true
     }
     @objc func toggleGuides() {
         guides.toggle()
-        guideButton.title = guides ? "輔助線：開  G" : "輔助線：關  G"
+        applyLocalizedLabels()
         needsDisplay = true
     }
     @objc func togglePause() {
         guard desktopTransition == nil else { return }
+        finishActiveInterval()
         paused.toggle()
         chargeStart = nil
         lastTick = ProcessInfo.processInfo.systemUptime
-        pauseButton.title = paused ? "繼續  Space" : "暫停  Space"
+        applyLocalizedLabels()
         needsDisplay = true
     }
     private func pauseForInterruption() {
+        finishActiveInterval()
+        toolbarDragOffset = nil
         chargeStart = nil
-        if game.shots > 0 || game.isMoving { paused = true; pauseButton.title = "繼續  Space" }
+        if game.shots > 0 || game.isMoving { paused = true; applyLocalizedLabels() }
         needsDisplay = true
     }
     @objc func selectFolder() {
         guard !desktopMode, let window, window.attachedSheet == nil else { return }
+        finishActiveInterval()
         sessionWasPaused = paused
         paused = true
         chargeStart = nil
         let panel = NSOpenPanel()
+        activeFolderPanel = panel
+        panel.title = l("选择图标文件夹", "Choose an icon folder")
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "使用圖示"
-        panel.message = "選擇桌面或其他資料夾。只讀取圖示，原始檔案不會移動。"
+        panel.prompt = l("使用图标", "Use icons")
+        panel.message = l("选择桌面或其他文件夹。只读取图标与缩略图，不会移动文件。", "Choose a folder. Only icons and image previews are read; source files stay in place.")
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }
+            self.activeFolderPanel = nil
             self.paused = self.sessionWasPaused
             if response == .OK, let url = panel.url {
                 let scoped = url.startAccessingSecurityScopedResource()
@@ -268,13 +577,13 @@ final class GameView: NSView {
                     self.iconSet = nextSet
                     self.restart()
                     self.refreshArtwork()
-                    self.showToast("已換成資料夾圖示，開始新的一局")
+                    self.showToast(self.l("已换成文件夹图标，开始新的一局", "Folder icons loaded. A new round is ready."))
                 } catch {
                     if scoped { url.stopAccessingSecurityScopedResource() }
-                    self.showToast("無法讀取圖示：\(error.localizedDescription)")
+                    self.showToast(self.l("无法读取图标：", "Could not read icons: ") + error.localizedDescription)
                 }
             }
-            self.pauseButton.title = self.paused ? "繼續  Space" : "暫停  Space"
+            self.applyLocalizedLabels()
             self.window?.makeFirstResponder(self)
             self.lastTick = ProcessInfo.processInfo.systemUptime
             self.needsDisplay = true
@@ -296,12 +605,27 @@ final class GameView: NSView {
         } catch {
             paused = wasPaused
             let alert = NSAlert()
-            alert.messageText = "無法開始桌面球局"
-            alert.informativeText = error.localizedDescription
-            alert.addButton(withTitle: "好")
-            alert.beginSheetModal(for: window)
+            alert.messageText = l("无法开始桌面球局", "Could not start desktop play")
+            alert.informativeText = localizedError(error)
+            activeAlert = alert; activeAlertError = error
+            alert.addButton(withTitle: l("好", "OK"))
+            alert.beginSheetModal(for: window) { [weak self] _ in self?.activeAlert = nil; self?.activeAlertError = nil }
         }
         needsDisplay = true
+    }
+
+    private func localizedError(_ error: Error) -> String {
+        guard language == .en else { return error.localizedDescription }
+        if let error = error as? DesktopSnapshot.SnapshotError {
+            switch error {
+            case .automationDenied: return "Allow Desktop Icon Billiards to access Finder in System Settings → Privacy & Security → Automation. It only reads desktop icons and positions."
+            case .noDesktopItems: return "No usable icons were found on the primary desktop. Your files and layout have not changed."
+            case .finderReadFailed(let code): return "Finder could not return the desktop icons (code \(code)). Nothing was changed."
+            case .scriptUnavailable, .invalidResponse: return "Finder returned unavailable desktop data. Nothing was changed."
+            }
+        }
+        if error is DesktopBackdrop.BackdropError { return "The current wallpaper could not be read as a still image. Choose an accessible picture wallpaper and retry. Your desktop has not changed." }
+        return error.localizedDescription
     }
 
     /// Overlay the usable primary desktop with wallpaper and animate only its
@@ -320,15 +644,20 @@ final class GameView: NSView {
         artworkLoader.cancel()
         savedFrame = window.frame
         savedStyle = window.styleMask
-        desktopItems = candidates.map { $0.0 }
-        desktopOrigins = candidates.map { $0.1 }
+        desktopOriginalCount = candidates.count
+        let chosen = DesktopSelection.indices(urls: candidates.map { $0.0.url })
+        desktopUniqueCount = Set(chosen).count
+        desktopItems = chosen.map { candidates[$0].0 }
+        desktopOrigins = chosen.map { candidates[$0].1 }
         desktopIconSize = snapshot.iconSize
         desktopBackdrop = backdrop
         wallpaperRect = NSRect(x: screen.frame.minX - frame.minX, y: screen.frame.minY - frame.minY,
                                width: screen.frame.width, height: screen.frame.height)
-        iconSet = IconSet(images: desktopItems.map(\.image), label: "你的桌面圖示 · \(desktopItems.count) 顆",
+        iconSet = IconSet(images: desktopItems.map(\.image), label: "你的桌面图标 · \(desktopItems.count) 颗",
                           sourceURLs: desktopItems.map(\.url))
         game.reset(iconCount: desktopItems.count)
+        previousPocketed = []; sinkAnimations = []; resultReadyAt = nil; completedRoundHandled = false
+        rankingController.beginRound(iconCount: game.iconCount)
         lastPocketCount = 0
         paused = false
         desktopMode = true
@@ -336,12 +665,12 @@ final class GameView: NSView {
         window.isOpaque = true
         window.backgroundColor = .black
         window.hasShadow = false
-        window.level = .floating
+        window.level = .normal
         window.setFrame(frame, display: true)
         layoutSubtreeIfNeeded()
-        desktopButton.title = "退出還原"
+        applyLocalizedLabels()
         folderButton.isEnabled = false
-        pauseButton.title = "暫停  Space"
+        applyLocalizedLabels()
         aim = Vector(620, 250)
         let targets = game.balls.filter { !$0.isCue }.map { screenPoint($0.position) }
         desktopTransition = DesktopTransition(started: ProcessInfo.processInfo.systemUptime, duration: 0.85,
@@ -366,6 +695,7 @@ final class GameView: NSView {
             : Array(repeating: 1, count: positions.count)
         chargeStart = nil
         paused = true
+        headerCollapsed = false; updateControlVisibility()
         desktopTransition = DesktopTransition(started: now, duration: 0.55,
             from: positions, to: desktopOrigins, fromAlpha: alphas, returning: true)
         needsDisplay = true
@@ -389,7 +719,7 @@ final class GameView: NSView {
                 if let savedFrame { window.setFrame(savedFrame, display: true) }
                 window.makeFirstResponder(self)
             }
-            desktopButton.title = "桌面開局"
+            applyLocalizedLabels()
             folderButton.isEnabled = true
             restart()
             refreshArtwork()
@@ -421,10 +751,11 @@ final class GameView: NSView {
         let size = transition.returning ? ballSize + (desktopIconSize - ballSize) * eased
             : desktopIconSize + (ballSize - desktopIconSize) * eased
         for (index, point) in positions.enumerated() where index < desktopItems.count {
-            let alpha = transition.returning ? transition.fromAlpha[index] + (1 - transition.fromAlpha[index]) * eased : 1
+            let desiredAlpha: CGFloat = index < desktopUniqueCount ? 1 : 0
+            let alpha = transition.returning ? transition.fromAlpha[index] + (desiredAlpha - transition.fromAlpha[index]) * eased : 1
             let imageRect = NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
             drawArtwork(desktopItems[index].image, in: imageRect, alpha: alpha)
-            let labelAlpha = transition.returning ? eased : 1 - eased
+            let labelAlpha = (index < desktopUniqueCount) ? (transition.returning ? eased : 1 - eased) : 0
             text(desktopItems[index].url.lastPathComponent, at: NSPoint(x: point.x, y: point.y - size / 2 - 18),
                  size: 11, color: .white.withAlphaComponent(labelAlpha), centered: true)
         }
@@ -436,12 +767,18 @@ final class GameView: NSView {
     }
     private func text(_ string: String, at point: NSPoint, size: CGFloat = 13,
                       color: NSColor = NSColor(hex: 0xc4d6d3), weight: NSFont.Weight = .regular,
-                      centered: Bool = false, mono: Bool = false) {
+                      centered: Bool = false, mono: Bool = false, maxWidth: CGFloat? = nil) {
         let font = mono ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let ns = string as NSString
         let width = centered ? ns.size(withAttributes: attributes).width : 0
-        ns.draw(at: NSPoint(x: point.x - width / 2, y: point.y), withAttributes: attributes)
+        if let maxWidth {
+            let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byTruncatingTail
+            paragraph.alignment = centered ? .center : .left
+            var boundedAttributes = attributes; boundedAttributes[.paragraphStyle] = paragraph
+            ns.draw(in: NSRect(x: centered ? point.x - maxWidth / 2 : point.x, y: point.y,
+                              width: max(1,maxWidth), height: size * 1.6), withAttributes: boundedAttributes)
+        } else { ns.draw(at: NSPoint(x: point.x - width / 2, y: point.y), withAttributes: attributes) }
     }
     private func rounded(_ rect: NSRect, radius: CGFloat, fill: NSColor, stroke: NSColor? = nil) {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
@@ -461,84 +798,81 @@ final class GameView: NSView {
         let now = ProcessInfo.processInfo.systemUptime
         if desktopMode, let desktopBackdrop { desktopBackdrop.draw(in: wallpaperRect) }
         else {
-            NSColor(hex: 0x0e181c).setFill(); bounds.fill()
-            NSGradient(starting: NSColor(hex: 0x172a2c), ending: NSColor(hex: 0x0b141a))?.draw(in: bounds, angle: -70)
+            if let windowBackdrop { windowBackdrop.draw(in:bounds) }
+            else { NSColor(hex:0x0e1a18).setFill(); bounds.fill() }
         }
-        let hudFill = NSColor(hex: 0x142327, alpha: desktopMode ? 0.95 : 0.75)
-        rounded(NSRect(x: 16, y: bounds.height - 120, width: bounds.width - 32, height: 104), radius: 16,
-                fill: hudFill, stroke: NSColor(hex: 0x48665f, alpha: 0.3))
-        text("MAC EDITION  /  01", at: NSPoint(x: 34, y: bounds.height - 39), size: 10,
-             color: NSColor(hex: 0x9bddae), weight: .semibold, mono: true)
-        text("桌面圖示撞球", at: NSPoint(x: 32, y: bounds.height - 72), size: 25,
-             color: NSColor(hex: 0xf1f6e8), weight: .semibold)
-        text(iconSet.label, at: NSPoint(x: 34, y: bounds.height - 102), size: 12, color: NSColor(hex: 0x8fa9a5))
-        let minutes = Int(game.elapsed) / 60, seconds = Int(game.elapsed) % 60
-        text(String(format: "%02d:%02d", minutes, seconds), at: NSPoint(x: bounds.width - 322, y: bounds.height - 103),
-             size: 15, color: NSColor(hex: 0xe6eee7), mono: true)
-        text("\(game.shots) 桿", at: NSPoint(x: bounds.width - 224, y: bounds.height - 103), size: 13, mono: true)
-        text("入袋  \(game.pocketedCount) / \(game.iconCount)", at: NSPoint(x: bounds.width - 144, y: bounds.height - 103),
-             size: 13, color: NSColor(hex: 0xafe4b7), weight: .medium, mono: true)
+        NSColor(hex:0x081a19,alpha:40/255).setFill(); bounds.fill()
         drawTable(now: now)
-        drawFooter()
-        if desktopTransition == nil {
-            if paused { drawCard(title: "暫停一下", subtitle: "按 Space 或「繼續」回到球局") }
-            else if game.isComplete { drawCard(title: "漂亮，清台了！", subtitle: "\(game.shots) 桿 · \(minutes) 分 \(seconds) 秒   /   按 R 再來一局") }
-            else if game.needsCuePlacement { drawCard(title: "白球自由球", subtitle: "點擊球桌上的空位，重新放置白球") }
+        if !headerCollapsed { drawToolbar() }
+        if chargeStart != nil { drawFooter() }
+        if desktopTransition == nil && !headerCollapsed {
+            if paused { drawCard(title: l("已暂停", "Paused"), subtitle: l("按空格键继续", "Press Space to continue.")) }
+            else if game.isComplete { drawCard(title: l("漂亮，清台了！", "Table cleared!"), subtitle: formattedTime(game.elapsed) + l(" · 按 R 再来一局", " · Press R for another round.")) }
+            else if game.needsCuePlacement { drawCard(title: l("白球自由球", "Ball in hand"), subtitle: l("点击球桌上的空位放置白球", "Click a clear spot to place the cue ball.")) }
         }
         if let toast {
-            rounded(NSRect(x: bounds.midX - 270, y: 114, width: 540, height: 34), radius: 10, fill: NSColor(hex: 0x29433b))
-            text(toast, at: NSPoint(x: bounds.midX, y: 123), size: 12, color: .white, centered: true)
+            let width = min(610, bounds.width - 48)
+            rounded(NSRect(x: bounds.midX - width/2, y: 10, width: width, height: 42), radius: 10,
+                    fill: NSColor(hex: 0x29433b))
+            text(toast, at: NSPoint(x: bounds.midX, y: 21), size: 11, color: .white,
+                 centered: true, maxWidth: width - 20)
         }
+    }
+    private func sourceDescription() -> String {
+        if desktopMode {
+            if desktopOriginalCount < game.iconCount {
+                return l("桌面 \(desktopOriginalCount) 个图标，复制补到 \(game.iconCount) 颗", "\(desktopOriginalCount) desktop icons, copied to \(game.iconCount) balls")
+            }
+            return l("桌面图标 · 使用 \(game.iconCount) / \(desktopOriginalCount) 颗", "Desktop icons · \(game.iconCount) of \(desktopOriginalCount) selected")
+        }
+        if iconSet.sourceURLs.allSatisfy({ $0.pathExtension.lowercased() == "app" }) {
+            return l("Applications App 图标 · \(game.iconCount) 颗", "Applications icons · \(game.iconCount) balls")
+        }
+        return l("文件夹图标与图片缩略图 · \(game.iconCount) 颗", "Folder icons and image previews · \(game.iconCount) balls")
+    }
+    private func formattedTime(_ value: Double) -> String {
+        let cs = Int(min(86_400_00,max(0,value * 100)))
+        let hours = cs / 360000
+        return hours > 0 ? String(format:"%d:%02d:%02d.%02d",hours,cs/6000%60,cs/100%60,cs%100)
+            : String(format:"%02d:%02d.%02d",cs/6000,cs/100%60,cs%100)
     }
     private func drawTable(now: TimeInterval) {
         let rect = playingRect
-        rounded(rect.insetBy(dx: -24, dy: -24), radius: 34, fill: NSColor(hex: 0x080f12, alpha: desktopMode ? 0.7 : 1),
-                stroke: NSColor(hex: 0x698473, alpha: 0.4))
-        rounded(rect.insetBy(dx: -14, dy: -14), radius: 23, fill: NSColor(hex: 0x27483b, alpha: desktopMode ? 0.45 : 1))
-        if !desktopMode {
-            let path = NSBezierPath(roundedRect: rect, xRadius: 9, yRadius: 9)
-            NSGradient(starting: NSColor(hex: 0x22664e), ending: NSColor(hex: 0x154333))?.draw(in: path, angle: -70)
-            // Restrained felt marks and the break line.
-            NSColor(hex: 0xc0e2bf, alpha: 0.018).setStroke()
-            let lines = NSBezierPath(); lines.lineWidth = 0.6
-            for y in stride(from: rect.minY + 3, to: rect.maxY, by: 5) {
-                lines.move(to: NSPoint(x: rect.minX + 4, y: y)); lines.line(to: NSPoint(x: rect.maxX - 4, y: y))
+        if tableVisible {
+            if desktopMode, let desktopBackdrop {
+                desktopBackdrop.drawBlurred(in:bounds,desktopFrame:wallpaperRect,clipRect:rect,darkenOpacity:0)
+            } else if let windowBackdrop {
+                windowBackdrop.drawBlurred(in:bounds,desktopFrame:bounds,clipRect:rect,darkenOpacity:0)
+            } else {
+                NSColor(hex:0x0e523f,alpha:0.61).setFill(); rect.fill()
             }
-            lines.stroke()
-        }
-        let line = NSBezierPath(); line.lineWidth = 1
-        line.setLineDash([4, 8], count: 2, phase: 0)
-        line.move(to: NSPoint(x: rect.minX + rect.width * 0.25, y: rect.minY + 18))
-        line.line(to: NSPoint(x: rect.minX + rect.width * 0.25, y: rect.maxY - 18))
-        NSColor(hex: 0xd5edd3, alpha: 0.13).setStroke(); line.stroke()
-        for index in 1..<8 where index != 4 {
-            for y in [rect.minY - 17, rect.maxY + 17] {
-                let point = NSPoint(x: rect.minX + rect.width * CGFloat(index) / 8, y: y)
-                let diamond = NSBezierPath()
-                diamond.move(to: NSPoint(x: point.x, y: point.y + 2.5))
-                diamond.line(to: NSPoint(x: point.x + 2.5, y: point.y))
-                diamond.line(to: NSPoint(x: point.x, y: point.y - 2.5))
-                diamond.line(to: NSPoint(x: point.x - 2.5, y: point.y)); diamond.close()
-                NSColor(hex: 0xb8c5a2, alpha: 0.6).setFill(); diamond.fill()
-            }
+            NSColor(hex:0x69ddb3,alpha:0.72).setStroke()
+            let edge = NSBezierPath(rect:rect); edge.lineWidth = 2; edge.stroke()
         }
         for pocket in game.pockets {
             let p = screenPoint(pocket), radius = game.pocketRadius * scale
+            if !tableVisible {
+                drawArtwork(trashIcon, in: NSRect(x:p.x-radius,y:p.y-radius,width:radius*2,height:radius*2))
+                continue
+            }
             let hole = NSRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)
-            NSColor(hex: 0x69856a, alpha: 0.5).setFill(); NSBezierPath(ovalIn: hole.insetBy(dx: -2, dy: -2)).fill()
-            NSColor(hex: 0x070e12).setFill(); NSBezierPath(ovalIn: hole).fill()
-            NSColor(hex: 0x000406).setFill(); NSBezierPath(ovalIn: hole.insetBy(dx: 4, dy: 4)).fill()
+            NSColor(hex: 0x69ddb3, alpha: 0.41).setFill(); NSBezierPath(ovalIn: hole.insetBy(dx: -2, dy: -2)).fill()
+            NSColor(hex: 0x0b1615).setFill(); NSBezierPath(ovalIn: hole).fill()
+            NSColor(hex: 0x040a0b).setFill(); NSBezierPath(ovalIn: hole.insetBy(dx: 4, dy: 4)).fill()
         }
-        text("DESKTOP ICON BILLIARDS", at: NSPoint(x: rect.midX, y: rect.midY + 65), size: 12,
-             color: NSColor(hex: 0xe1efd5, alpha: desktopMode ? 0.4 : 0.12), weight: .semibold, centered: true)
-        if guides && isActiveGame && !game.needsCuePlacement { drawGuide() }
+        if tableVisible {
+            text("GitHub@liuxiaogang-com",at:NSPoint(x:rect.midX,y:rect.minY-game.pocketRadius*scale-22),
+                size:11,color:NSColor.white.withAlphaComponent(0.55),centered:true,maxWidth:max(1,rect.width-40))
+        }
+        if isActiveGame && !game.needsCuePlacement && (tableVisible || shiftHeld) { drawGuide() }
         if let desktopTransition {
             drawDesktopTransition(desktopTransition, now: now)
         } else {
             for ball in game.balls where !ball.pocketed { drawBall(ball) }
         }
-        if now - pocketFlash < 0.65 && game.pocketedCount > 0 {
-            text("+1 入袋", at: NSPoint(x: rect.midX, y: rect.maxY + 28), size: 13,
+        drawSinkAnimations(now: now)
+        if now - pocketFlash < 0.65 && game.pocketedCount > 0 && tableVisible {
+            text(l("+1 入袋", "+1 pocketed"), at: NSPoint(x: rect.midX, y: rect.maxY + 28), size: 13,
                  color: NSColor(hex: 0xb8efaa, alpha: 1 - (now - pocketFlash) / 0.65), weight: .semibold, centered: true)
         }
     }
@@ -549,21 +883,14 @@ final class GameView: NSView {
         let shadow = NSShadow(); shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
         shadow.shadowBlurRadius = 5; shadow.shadowOffset = NSSize(width: 1, height: -3); shadow.set()
         if ball.isCue {
-            NSGradient(starting: NSColor(hex: 0xffffff), ending: NSColor(hex: 0xbcc7c4))?.draw(in: NSBezierPath(ovalIn: circle), angle: -60)
+            drawArtwork(cueArtwork, in:circle)
         } else {
-            NSColor(hex: 0x0c2420, alpha: 0.45).setFill(); NSBezierPath(ovalIn: circle).fill()
             if !iconSet.images.isEmpty {
                 let image = iconSet.images[(max(1, ball.id) - 1) % iconSet.images.count]
-                drawArtwork(image, in: circle.insetBy(dx: r * 0.06, dy: r * 0.06))
+                drawArtwork(image, in: circle.insetBy(dx: r * 0.24, dy: r * 0.24))
             }
-            NSColor.white.withAlphaComponent(0.12).setStroke()
-            NSBezierPath(ovalIn: circle).stroke()
         }
         NSGraphicsContext.restoreGraphicsState()
-        if ball.isCue {
-            NSColor(hex: 0xffffff, alpha: 0.75).setFill()
-            NSBezierPath(ovalIn: NSRect(x: p.x - r * 0.4, y: p.y + r * 0.2, width: r * 0.35, height: r * 0.28)).fill()
-        }
     }
     private func drawGuide() {
         guard let cue = game.balls.first(where: { $0.isCue && !$0.pocketed }) else { return }
@@ -571,64 +898,134 @@ final class GameView: NSView {
         let length = hypot(dx, dy)
         guard length > 1 else { return }
         let ux = dx / length, uy = dy / length
-        var distance = 1500.0
-        // First rail intersection, then first ball intersection (swept cue circle).
-        if ux > 0 { distance = min(distance, (game.width - cue.radius - cue.position.x) / ux) }
-        if ux < 0 { distance = min(distance, (cue.radius - cue.position.x) / ux) }
-        if uy > 0 { distance = min(distance, (game.height - cue.radius - cue.position.y) / uy) }
-        if uy < 0 { distance = min(distance, (cue.radius - cue.position.y) / uy) }
-        for ball in game.balls where !ball.isCue && !ball.pocketed {
-            let bx = ball.position.x - cue.position.x, by = ball.position.y - cue.position.y
-            let projection = bx * ux + by * uy
-            let perpendicularSq = bx * bx + by * by - projection * projection
-            let radius = ball.radius + cue.radius
-            if projection > 0 && perpendicularSq < radius * radius {
-                distance = min(distance, max(0, projection - sqrt(radius * radius - perpendicularSq)))
+        NSGraphicsContext.saveGraphicsState()
+        if !tableVisible { NSGraphicsContext.current?.cgContext.setAlpha(0.55) }
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        func isBright(_ start: Vector,_ end: Vector) -> Bool {
+            let backdrop = desktopMode ? desktopBackdrop : windowBackdrop
+            let frame = desktopMode ? wallpaperRect : bounds
+            let samples = (0...4).compactMap { index -> CGFloat? in
+                let t = Double(index)/4
+                return backdrop?.luminance(at:screenPoint(start+(end-start)*t),desktopFrame:frame)
+            }
+            return !samples.isEmpty && samples.reduce(0,+)/CGFloat(samples.count)>150
+        }
+        if guides {
+            let prediction = game.aimGuide(toward: aim)
+            func palette(_ role:Int,_ bright:Bool) -> NSColor {
+                let colors: [UInt32] = bright ? [0x1a2a30,0x0a46a8,0x007644] : [0xf0fcf7,0x96cdff,0x6cf5b7]
+                return NSColor(hex:colors[role])
+            }
+            func segment(_ start: Vector, _ end: Vector, role:Int) {
+                let bright = isBright(start,end), color = palette(role,bright)
+                let line = NSBezierPath(); line.setLineDash([12,8],count:2,phase:0)
+                line.move(to:screenPoint(start)); line.line(to:screenPoint(end))
+                (bright ? NSColor.white : NSColor(hex:0x040e0d)).withAlphaComponent(0.8).setStroke()
+                line.lineWidth = 5.5; line.stroke()
+                color.setStroke(); line.lineWidth = 2.6; line.stroke()
+                let point = screenPoint(end), dot = NSRect(x:point.x-5,y:point.y-5,width:10,height:10)
+                let ring = NSBezierPath(ovalIn:dot); ring.lineWidth = 2; ring.stroke()
+            }
+            if prediction.cuePath.count >= 2 { segment(prediction.cuePath[0],prediction.cuePath[1],role:0) }
+            if prediction.cuePath.count >= 3 { segment(prediction.cuePath[1],prediction.cuePath[2],role:1) }
+            if prediction.objectPath.count >= 2 { segment(prediction.objectPath[0],prediction.objectPath[1],role:2) }
+            func contact(_ center:Vector,_ radius:Double,_ role:Int) {
+                let point = screenPoint(center), r = radius*scale, color = palette(role,isBright(center,center))
+                let ring=NSBezierPath(ovalIn:NSRect(x:point.x-r,y:point.y-r,width:r*2,height:r*2))
+                if role == 2 { color.withAlphaComponent(0.1).setFill(); ring.fill() }
+                color.withAlphaComponent(0.55).setStroke(); ring.lineWidth=1.8; ring.stroke()
+            }
+            if let center = prediction.collisionCenter { contact(center,cue.radius,1) }
+            if let targetID=prediction.targetBallID,let target=game.balls.first(where:{$0.id==targetID}) {
+                contact(target.position,target.radius,2)
             }
         }
-        distance = max(0, distance)
-        let origin = screenPoint(cue.position)
-        let target = screenPoint(Vector(cue.position.x + ux * distance, cue.position.y + uy * distance))
-        let line = NSBezierPath(); line.lineWidth = 1.2; line.setLineDash([5, 6], count: 2, phase: 0)
-        line.move(to: origin); line.line(to: target)
-        NSColor(hex: 0xe2f3df, alpha: 0.55).setStroke(); line.stroke()
-        let r = cue.radius * scale
-        NSColor(hex: 0xe2f3df, alpha: 0.4).setStroke()
-        NSBezierPath(ovalIn: NSRect(x: target.x - r, y: target.y - r, width: 2 * r, height: 2 * r)).stroke()
-        // Cue stick pulls back as power rises.
-        let gap = cue.radius + 13 + charge * 55
-        let stick = NSBezierPath(); stick.lineWidth = 5; stick.lineCapStyle = .round
-        stick.move(to: screenPoint(Vector(cue.position.x - ux * gap, cue.position.y - uy * gap)))
-        stick.line(to: screenPoint(Vector(cue.position.x - ux * (gap + 130), cue.position.y - uy * (gap + 130))))
-        NSColor(hex: 0xd6bb83).setStroke(); stick.stroke()
+        // Match the original long, two-tone wooden cue and blue chalk tip.
+        let gap = cue.radius + 12 + charge*34
+        let tip = screenPoint(Vector(cue.position.x-ux*gap,cue.position.y-uy*gap))
+        var stickLength = min(440,game.height*0.48)*scale
+        for (value,direction,low,high) in [(tip.x,-ux,CGFloat(5),bounds.width-5),(tip.y,-uy,CGFloat(5),bounds.height-5)] {
+            if abs(direction) > 0.000001 { stickLength = min(stickLength,max(0,((direction > 0 ? high : low)-value)/direction)) }
+        }
+        let tail = NSPoint(x:tip.x-ux*stickLength,y:tip.y-uy*stickLength)
+        let grip = NSPoint(x:tail.x+(tip.x-tail.x)*0.37,y:tail.y+(tip.y-tail.y)*0.37)
+        func rod(_ from:NSPoint,_ to:NSPoint,_ color:UInt32,_ width:CGFloat) {
+            let path=NSBezierPath(); path.move(to:from); path.line(to:to); path.lineWidth=width; path.lineCapStyle = .round
+            NSColor(hex:color).setStroke(); path.stroke()
+        }
+        rod(tail,tip,0x3c2516,7*max(0.65,scale)); rod(tail,tip,0xefc17e,4*max(0.65,scale))
+        rod(tail,grip,0x7f4f30,5*max(0.65,scale))
+        NSColor(hex:0x7ecfe4).setFill(); NSBezierPath(ovalIn:NSRect(x:tip.x-2,y:tip.y-2,width:4,height:4)).fill()
+    }
+    private func drawSinkAnimations(now: TimeInterval) {
+        for animation in sinkAnimations {
+            let progress = min(1,max(0,(now-animation.started)/0.62))
+            let from = screenPoint(animation.ball.position), to = screenPoint(animation.pocket)
+            let point = NSPoint(x:from.x+(to.x-from.x)*progress, y:from.y+(to.y-from.y)*progress)
+            let r = animation.ball.radius * scale
+            NSGraphicsContext.saveGraphicsState()
+            let transform = NSAffineTransform(); transform.translateX(by:point.x,yBy:point.y)
+            transform.rotate(byDegrees:progress*220); transform.scale(by:max(0.02,1-progress)); transform.concat()
+            let frame = NSRect(x:-r,y:-r,width:r*2,height:r*2)
+            if animation.ball.isCue {
+                drawArtwork(cueArtwork,in:frame,alpha:1-progress)
+            } else if iconSet.images.indices.contains(animation.ball.id-1) {
+                drawArtwork(iconSet.images[animation.ball.id-1],in:frame,alpha:1-progress)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            NSColor(hex:0xaadab7,alpha:(1-progress)*0.5).setStroke()
+            let ripple = game.pocketRadius * scale * (1+progress)
+            NSBezierPath(ovalIn:NSRect(x:to.x-ripple,y:to.y-ripple,width:ripple*2,height:ripple*2)).stroke()
+            let glow = pow(sin(Double.pi*progress),0.65)
+            for index in 0..<6 {
+                let angle = Double(index)*Double.pi/3+Double(animation.ball.id)*0.61
+                let distance = progress*Double(12+index%3*7)*scale
+                let size = max(0.7,(1-progress)*Double(2+index%2))*scale
+                let x=to.x+cos(angle)*distance,y=to.y+sin(angle)*distance
+                NSColor(hex:0xadffdd,alpha:0.82*glow).setFill()
+                NSBezierPath(ovalIn:NSRect(x:x-size,y:y-size,width:size*2,height:size*2)).fill()
+            }
+        }
+    }
+    private func drawToolbar() {
+        let panel = headerRect, geometry = toolbarLayout
+        NSColor(hex:0x0e1a18).setFill(); panel.fill()
+        text("⋮⋮",at:NSPoint(x:panel.minX+10,y:panel.midY-8),size:16,color:NSColor(hex:0x8aa69e))
+        let y = panel.minY+geometry.statsY
+        NSColor(hex:0x263d36).setFill()
+        NSRect(x:panel.minX+34,y:y+(bounds.width < 500 ? 45 : 35),width:panel.width-46,height:1).fill()
+        var x = panel.minX+34
+        for (title,value) in toolbarStats {
+            let labelWidth = (title as NSString).size(withAttributes:[.font:NSFont.systemFont(ofSize:11)]).width
+            let valueWidth = (value as NSString).size(withAttributes:[.font:NSFont.monospacedDigitSystemFont(ofSize:14,weight:.semibold)]).width
+            if bounds.width < 500 {
+                text(title,at:NSPoint(x:x,y:y+24),size:11,color:NSColor(hex:0x8aa69e))
+                text(value,at:NSPoint(x:x,y:y+4),size:14,color:NSColor(hex:0xe8f5f0),weight:.semibold,mono:true)
+                x += max(labelWidth,valueWidth)+16
+            } else {
+                text(title,at:NSPoint(x:x,y:y+7),size:11,color:NSColor(hex:0x8aa69e)); x += labelWidth+6
+                text(value,at:NSPoint(x:x,y:y+5),size:14,color:NSColor(hex:0xe8f5f0),weight:.semibold,mono:true); x += valueWidth+16
+            }
+        }
     }
     private func drawFooter() {
-        rounded(NSRect(x: 16, y: 16, width: bounds.width - 32, height: 101), radius: 16,
-                fill: NSColor(hex: 0x142327, alpha: desktopMode ? 0.95 : 0.75), stroke: NSColor(hex: 0x48665f, alpha: 0.3))
-        let status: String
-        if let desktopTransition {
-            status = desktopTransition.returning ? "圖示正在回到桌面原位…" : "你的桌面圖示，準備開球…"
-        } else {
-            status = paused ? "已暫停" : game.isComplete ? "清台完成" : game.needsCuePlacement ? "點擊空位放置白球" : game.isMoving ? "球還在滾動…" : chargeStart != nil ? "放開左鍵，擊球！" : "移動滑鼠瞄準 · 按住左鍵蓄力 · 放開擊球"
-        }
-        text(status, at: NSPoint(x: 34, y: 48), size: 13, color: NSColor(hex: 0xe2eadc), weight: .medium)
-        text("原作 LXG / liuxiaogang-com · MIT    |    Mac 原型 · Esc 離開", at: NSPoint(x: 34, y: 28), size: 10,
-             color: NSColor(hex: 0x91a8a1))
-        let bar = NSRect(x: bounds.width - 296, y: 48, width: 260, height: 8)
-        rounded(bar, radius: 4, fill: NSColor(hex: 0x2b403c))
-        if charge > 0 {
-            rounded(NSRect(x: bar.minX, y: bar.minY, width: bar.width * charge, height: bar.height), radius: 4,
-                    fill: NSColor(hex: charge > 0.85 ? 0xf1cf7a : 0xace7a5))
-        }
-        text("力度", at: NSPoint(x: bar.minX, y: 70), size: 11, color: NSColor(hex: 0x9ab2a8))
-        text("\(Int(charge * 100))%", at: NSPoint(x: bar.maxX - 38, y: 70), size: 14,
-             color: NSColor(hex: 0xe2eadc), weight: .medium, mono: true)
-        text("1.5 秒蓄滿，再往返", at: NSPoint(x: bar.minX, y: 28), size: 10, color: NSColor(hex: 0x91a8a1))
+        let origin = chargeOrigin ?? NSPoint(x:bounds.midX,y:60)
+        let meter = WindowGeometry.clamp(NSRect(x:origin.x+18,y:origin.y-58,width:150,height:45),to:bounds.insetBy(dx:8,dy:8))
+        rounded(meter,radius:6,fill:NSColor(hex:0x0d1917,alpha:0.96),stroke:NSColor(hex:0x4a695e))
+        text(l("力度", "Power"),at:NSPoint(x:meter.minX+8,y:meter.minY+24),size:12,color:NSColor(hex:0xdeeee7))
+        let falling = chargeStart.map { (ProcessInfo.processInfo.systemUptime-$0).truncatingRemainder(dividingBy:3)>1.5 } ?? false
+        text(falling ? "⌄" : "⌃",at:NSPoint(x:meter.midX-4,y:meter.minY+21),size:14,color:NSColor(hex:0x85f2c6))
+        text("\(Int(charge*100))%",at:NSPoint(x:meter.maxX-43,y:meter.minY+24),size:12,color:NSColor(hex:0x85f2c6),mono:true)
+        let bar = NSRect(x:meter.minX+8,y:meter.minY+9,width:134,height:6)
+        rounded(bar,radius:3,fill:NSColor(hex:0x314c46))
+        if charge > 0 { rounded(NSRect(x:bar.minX,y:bar.minY,width:bar.width*charge,height:bar.height),radius:3,fill:NSColor(hex:0x6fefb9)) }
     }
     private func drawCard(title: String, subtitle: String) {
-        let rect = NSRect(x: bounds.midX - 230, y: playingRect.midY - 52, width: 460, height: 104)
+        guard playingRect.height > 120 else { return }
+        let width = min(460,bounds.width-64)
+        let rect = NSRect(x: bounds.midX - width/2, y: playingRect.midY - 52, width: width, height: 104)
         rounded(rect, radius: 18, fill: NSColor(hex: 0x101f23, alpha: 0.96), stroke: NSColor(hex: 0x94b68e, alpha: 0.55))
-        text(title, at: NSPoint(x: rect.midX, y: rect.minY + 53), size: 25, color: NSColor(hex: 0xe8f1d9), weight: .semibold, centered: true)
-        text(subtitle, at: NSPoint(x: rect.midX, y: rect.minY + 25), size: 13, centered: true)
+        text(title, at: NSPoint(x: rect.midX, y: rect.minY + 53), size: 25, color: NSColor(hex: 0xe8f1d9), weight: .semibold, centered: true, maxWidth: rect.width - 24)
+        text(subtitle, at: NSPoint(x: rect.midX, y: rect.minY + 25), size: 12, centered: true, maxWidth: rect.width - 24)
     }
 }

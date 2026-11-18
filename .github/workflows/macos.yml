@@ -31,6 +31,18 @@ jobs:
         run: bash macos/check-artwork.sh
       - name: Test desktop entry and restoration with invisible fixtures
         run: bash macos/check-session.sh
+      - name: Test localized layout, selection and instance safety
+        run: bash macos/check-parity.sh
+      - name: Test result cards and cue appearance
+        run: bash macos/check-presentation.sh
+      - name: Test Windows-style cue ball shading
+        run: bash macos/check-ball-artwork.sh
+      - name: Test opt-in ranking with intercepted requests
+        run: bash macos/check-ranking.sh
+      - name: Test manual Mac update checks with intercepted requests
+        run: bash macos/check-update.sh
+      - name: Test donation and attribution windows
+        run: bash macos/check-information.sh
       - name: Build a universal app
         run: bash macos/build.sh --universal
       - name: Upload the prototype

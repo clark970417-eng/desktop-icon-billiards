@@ -105,6 +105,164 @@ MainActor.assumeIsolated {
         try expect(artwork.redComponent > 0.95 && artwork.greenComponent < 0.05 && artwork.alphaComponent > 0.99,
                    "fixture wallpaper artwork was not rendered")
     }
+    func rendered(width: Int = 200, height: Int = 140, scale: CGFloat = 1,
+                  _ draw: () -> Void) throws -> NSBitmapImageRep {
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(CGFloat(width) * scale),
+            pixelsHigh: Int(CGFloat(height) * scale), bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+            throw FixtureFailure(description: "could not create blur fixture context")
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.scaleBy(x: scale, y: scale)
+        draw()
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap
+    }
+    func pixel(_ bitmap: NSBitmapImageRep, _ x: Int, _ y: Int) throws -> NSColor {
+        guard let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+            throw FixtureFailure(description: "could not sample blur fixture")
+        }
+        return colour
+    }
+    func colourDistance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+            + abs(a.blueComponent - b.blueComponent) + abs(a.alphaComponent - b.alphaComponent)
+    }
+    let patternedImage = NSImage(size: NSSize(width: 120, height: 80), flipped: false) { rect in
+        NSColor.blue.setFill(); rect.fill()
+        NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 60, height: 40).fill()
+        NSColor.green.setFill(); NSRect(x: 0, y: 40, width: 60, height: 40).fill()
+        return true
+    }
+    let placedFrame = NSRect(x: -20, y: -10, width: 240, height: 160)
+    let viewBounds = NSRect(x: 0, y: 0, width: 200, height: 140)
+    let surface = NSRect(x: 20, y: 20, width: 160, height: 100)
+    let blurBacking = DesktopBackdrop(image: patternedImage, options: [
+        .imageScaling: NSNumber(value: NSImageScaling.scaleAxesIndependently.rawValue)
+    ])
+    check("table blur mixes wallpaper detail only within the requested playing surface") {
+        let clear = try rendered { blurBacking.draw(in: placedFrame) }
+        let blurred = try rendered {
+            blurBacking.draw(in: placedFrame)
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: surface, darkenOpacity: 0)
+        }
+        let mix = try pixel(blurred, 100, 50)
+        try expect(mix.blueComponent > 0.15 && mix.redComponent + mix.greenComponent > 0.15,
+                   "wallpaper transition was not blurred")
+        let originalOutside = try pixel(clear, 5, 5), resultOutside = try pixel(blurred, 5, 5)
+        try expect(colourDistance(originalOutside, resultOutside) < 0.005, "blur modified clear wallpaper outside table")
+    }
+    check("blurred wallpaper preserves full-display placement and vertical orientation") {
+        let clear = try rendered { blurBacking.draw(in: placedFrame) }
+        let blurred = try rendered {
+            blurBacking.draw(in: placedFrame)
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: surface, darkenOpacity: 0)
+        }
+        for (x,y) in [(40,35),(40,105),(160,35),(160,105)] {
+            let reference = try pixel(clear,x,y), result = try pixel(blurred,x,y)
+            try expect(colourDistance(reference,result) < 0.04, "blurred crop shifted or flipped relative to clear wallpaper")
+        }
+    }
+    check("steady animation frames and tint changes reuse one filtered image") {
+        let before = blurBacking.blurGenerationCount
+        _ = try rendered {
+            for _ in 0..<30 {
+                blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: surface, darkenOpacity: 0)
+            }
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: surface, darkenOpacity: 0.2)
+        }
+        try expect(blurBacking.blurGenerationCount == before, "steady frames or tint change recomputed Gaussian blur")
+    }
+    check("table geometry and Retina backing changes invalidate the filtered image once") {
+        let before = blurBacking.blurGenerationCount
+        let moved = surface.offsetBy(dx: 1, dy: 0)
+        _ = try rendered {
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: moved)
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: moved)
+        }
+        try expect(blurBacking.blurGenerationCount == before + 1, "geometry change did not invalidate exactly once")
+        _ = try rendered(scale: 2) {
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: moved)
+            blurBacking.drawBlurred(in: viewBounds, desktopFrame: placedFrame, clipRect: moved)
+        }
+        try expect(blurBacking.blurGenerationCount == before + 2, "Retina scale change did not invalidate exactly once")
+    }
+    check("desktop table tint stays opaque and darkens the cached wallpaper") {
+        let whiteImage = NSImage(size: NSSize(width: 20,height: 20),flipped: false) { rect in
+            NSColor.white.setFill(); rect.fill(); return true
+        }
+        let backing = DesktopBackdrop(image: whiteImage,options: [.imageScaling: NSNumber(value: NSImageScaling.scaleAxesIndependently.rawValue)])
+        let plain = try rendered { backing.drawBlurred(in:viewBounds,desktopFrame:viewBounds,clipRect:surface,darkenOpacity:0) }
+        let tinted = try rendered { backing.drawBlurred(in:viewBounds,desktopFrame:viewBounds,clipRect:surface) }
+        let original = try pixel(plain,100,60), darker = try pixel(tinted,100,60)
+        try expect(darker.redComponent < original.redComponent - 0.08 && darker.alphaComponent > 0.99,
+                   "table tint did not darken an opaque wallpaper crop")
+        try expect(backing.blurGenerationCount == 1, "adding tint recomputed the image filter")
+    }
+    check("empty or off-canvas table crops do not run image filters") {
+        let before = blurBacking.blurGenerationCount
+        _ = try rendered {
+            blurBacking.drawBlurred(in:viewBounds,desktopFrame:placedFrame,clipRect:.zero)
+            blurBacking.drawBlurred(in:viewBounds,desktopFrame:placedFrame,clipRect:NSRect(x:500,y:500,width:100,height:100))
+        }
+        try expect(blurBacking.blurGenerationCount == before, "invisible crop ran a Gaussian filter")
+    }
+    check("cached wallpaper luminance preserves placement and vertical orientation") {
+        let brightnessImage = NSImage(size:NSSize(width:80,height:80),flipped:false) { rect in
+            NSColor.black.setFill(); rect.fill()
+            NSColor.white.setFill(); NSRect(x:0,y:40,width:40,height:40).fill()
+            NSColor.red.setFill(); NSRect(x:40,y:0,width:40,height:80).fill()
+            return true
+        }
+        let backing = DesktopBackdrop(image:brightnessImage,options:[.imageScaling:NSNumber(value:NSImageScaling.scaleAxesIndependently.rawValue)])
+        let placement = NSRect(x:-20,y:-10,width:160,height:160)
+        try expect((backing.luminance(at:NSPoint(x:20,y:110),desktopFrame:placement) ?? 0) > 250,
+                   "top-left white wallpaper region was shifted or flipped")
+        try expect((backing.luminance(at:NSPoint(x:20,y:30),desktopFrame:placement) ?? 255) < 5,
+                   "bottom-left black wallpaper region was shifted or flipped")
+        let red = backing.luminance(at:NSPoint(x:100,y:60),desktopFrame:placement) ?? 0
+        try expect(abs(red - 76) <= 1, "brightness does not use the Windows RGB-to-L weights")
+    }
+    check("guide brightness sampling reuses a coarse map for repeated points and legs") {
+        let backing = DesktopBackdrop(image:patternedImage,options:[.imageScaling:NSNumber(value:NSImageScaling.scaleAxesIndependently.rawValue)])
+        for _ in 0..<30 {
+            for sample in 0..<5 {
+                _ = backing.luminance(at:NSPoint(x:30+sample*25,y:60),desktopFrame:placedFrame)
+            }
+        }
+        try expect(backing.luminanceGenerationCount == 1, "guide points regenerated their wallpaper brightness map")
+        _ = backing.luminance(at:NSPoint(x:30,y:60),desktopFrame:placedFrame.offsetBy(dx:1,dy:0))
+        try expect(backing.luminanceGenerationCount == 2, "wallpaper placement change did not rebuild map")
+    }
+    check("luminance sampling observes wallpaper fit bands and rejects off-display points") {
+        let whiteImage = NSImage(size:NSSize(width:80,height:40),flipped:false) { rect in
+            NSColor.white.setFill(); rect.fill(); return true
+        }
+        let backing = DesktopBackdrop(image:whiteImage,options:[
+            .imageScaling:NSNumber(value:NSImageScaling.scaleProportionallyUpOrDown.rawValue),
+            .allowClipping:NSNumber(value:false),.fillColor:NSColor.black
+        ])
+        let placement = NSRect(x:0,y:0,width:160,height:160)
+        try expect((backing.luminance(at:NSPoint(x:80,y:80),desktopFrame:placement) ?? 0) > 250,
+                   "fit artwork did not contribute brightness")
+        try expect((backing.luminance(at:NSPoint(x:80,y:12),desktopFrame:placement) ?? 255) < 5,
+                   "fit band did not use the wallpaper fill colour")
+        try expect(backing.luminance(at:NSPoint(x:-1,y:20),desktopFrame:placement) == nil,
+                   "off-display guide point sampled unrelated pixels")
+        try expect(backing.luminance(at:NSPoint(x:CGFloat.nan,y:20),desktopFrame:placement) == nil,
+                   "invalid guide point was accepted")
+    }
+    check("Retina guide sampling rebuilds its eight-physical-pixel grid only once") {
+        let backing = DesktopBackdrop(image:patternedImage,options:[.imageScaling:NSNumber(value:NSImageScaling.scaleAxesIndependently.rawValue)])
+        _ = backing.luminance(at:NSPoint(x:40,y:40),desktopFrame:placedFrame)
+        _ = try rendered(scale:2) {
+            for _ in 0..<30 { _ = backing.luminance(at:NSPoint(x:40,y:40),desktopFrame:placedFrame) }
+        }
+        try expect(backing.luminanceGenerationCount == 2, "Retina sampling failed to cache its scale-specific map")
+    }
     let primary = NSRect(x: 0, y: 0, width: 1440, height: 900)
     check("Finder primary-screen points convert top-left to bottom-left") {
         let point = DesktopBackdrop.viewPoint(finderPosition: NSPoint(x: 100, y: 200),
@@ -162,11 +320,11 @@ MainActor.assumeIsolated {
         try expect(result.items.count == 1 && loaded == 1, "invalid rows were loaded")
         try expect(result.items[0].url.path == "/fixture/Desktop/item3", "valid row was lost")
     }
-    check("Finder parser bounds work and image loading to 45 desktop items") {
+    check("Finder parser bounds work and image loading before game selection") {
         var loaded = 0
-        let result = try DesktopSnapshot.parse(snapshot((1...60).map { row($0) })) { _ in loaded += 1; return artwork }
-        try expect(result.items.count == 45 && loaded == 45, "45-item cap not enforced")
-        try expect(result.items.last?.url.path == "/fixture/Desktop/item45", "cap changed source ordering")
+        let result = try DesktopSnapshot.parse(snapshot((1...600).map { row($0) })) { _ in loaded += 1; return artwork }
+        try expect(result.items.count == 512 && loaded == 512, "capture cap not enforced")
+        try expect(result.items.last?.url.path == "/fixture/Desktop/item512", "cap changed source ordering")
     }
     check("Finder parser rejects empty or structurally invalid snapshots") {
         for descriptor in [snapshot([]), list([]), NSAppleEventDescriptor(string: "invalid")] {

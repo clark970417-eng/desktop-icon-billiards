@@ -13,7 +13,10 @@ MainActor.assumeIsolated {
     let originalFrame = NSRect(x: 80, y: 80, width: 1180, height: 790)
     let window = FixtureWindow(contentRect: originalFrame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    let view = GameView(frame: NSRect(origin: .zero, size: originalFrame.size))
+    let settings = RankingSettings(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("billiards-off-\(UUID().uuidString).json"))
+    settings.preferences.enabled = false
+    let isolatedRanking = RankingController(language: .zhHans, settings: settings)
+    let view = GameView(frame: NSRect(origin: .zero, size: originalFrame.size), ranking: isolatedRanking)
     window.contentView = view
     view.autoresizingMask = [.width, .height]
     let previousWindowFrame = window.frame
@@ -44,7 +47,7 @@ MainActor.assumeIsolated {
     do {
         try view.startDesktop(snapshot: snapshot, backdrop: backdrop, screen: screen, presentWindow: false)
         check(view.desktopMode && view.isDesktopTransitioning, "desktop entry starts with real item count")
-        check(view.game.iconCount == 3, "sparse desktop is not padded with duplicate icons")
+        check(view.game.iconCount == 15, "sparse desktop artwork is padded to the released 15-ball rule")
         check(window.styleMask == [.borderless] && window.isOpaque, "wallpaper backing covers originals in own window")
         view.restart()
         check(view.isDesktopTransitioning && view.game.shots == 0, "restart cannot interrupt entry")
@@ -111,6 +114,77 @@ MainActor.assumeIsolated {
               "restoring from picture balls returns to the installed App source")
         try FileManager.default.removeItem(at: fixtures)
     } catch { failures += 1; print("FAIL desktop session setup") }
+    // The same live model must survive both language directions and layout changes.
+    view.setLanguage(.zhHans)
+    _ = view.game.shoot(toward: .init(900,250),power:0.4)
+    pump(0.1)
+    view.suspendForSystemChange()
+    let retainedBalls = view.game.balls, retainedShots = view.game.shots, retainedTime = view.game.elapsed
+    for language in [AppLanguage.en, .zhHans] {
+        view.setLanguage(language)
+        check(view.game.balls == retainedBalls && view.game.shots == retainedShots && view.game.elapsed == retainedTime && view.paused,
+              "language switch preserves the active round, timing and pause state")
+        for width in [420.0,640.0,1180.0] {
+            view.setFrameSize(NSSize(width:width,height:700)); view.needsLayout = true; view.layoutSubtreeIfNeeded()
+            let controls = view.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+            let boundsOK = controls.allSatisfy { view.bounds.contains($0.frame) }
+            var overlap = false
+            for i in controls.indices { for j in controls.indices where j > i {
+                if controls[i].frame.intersects(controls[j].frame) { overlap = true }
+            } }
+            check(boundsOK && !overlap,"final language-specific native controls fit width \(Int(width))")
+        }
+    }
+    for language in [AppLanguage.en, .zhHans] {
+        view.setLanguage(language)
+        view.toggleGuides()
+        for size in [NSSize(width:360,height:480),NSSize(width:640,height:440),NSSize(width:640,height:480),NSSize(width:360,height:400),NSSize(width:320,height:400)] {
+            view.setFrameSize(size); view.needsLayout = true; view.layoutSubtreeIfNeeded()
+            let controls = view.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+            let lowest = controls.map { $0.frame.minY }.min() ?? 0
+            let fits = controls.allSatisfy { view.bounds.contains($0.frame) }
+            let radius = view.game.pocketRadius*view.playingRect.width/view.game.width
+            let pocketsBounds = view.playingRect.insetBy(dx:-radius,dy:-radius)
+            let credit = controls.first { $0.title == "GitHub@liuxiaogang-com" }
+            let creditFits = credit.map { $0.frame.width >= $0.intrinsicContentSize.width } ?? false
+            check(fits && creditFits && view.bounds.contains(pocketsBounds) && pocketsBounds.maxY+8 < lowest && pocketsBounds.minY >= 48,
+                  "compact native layout keeps all six visible holes clear of toolbar and power meter at \(Int(size.width))x\(Int(size.height))")
+        }
+    }
+    view.toggleTable()
+    check(view.game.balls == retainedBalls && view.game.shots == retainedShots,
+          "hidden-table mode preserves the round and collision state")
+    view.toggleTable()
+    view.screenConfigurationChanged()
+    check(view.paused && view.game.balls == retainedBalls,
+          "display change in a normal window pauses without losing the round")
+    check(!isolatedRanking.isEnabled && isolatedRanking.statusCode == "off",
+          "language and display refresh leave ranking disabled")
+    view.setFrameSize(NSSize(width:1180,height:790)); view.needsLayout = true; view.layoutSubtreeIfNeeded()
+    let buttons = view.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+    let beforeDrag = buttons.map(\.frame)
+    let first = buttons.first { $0.title.hasPrefix("辅助线") || $0.title.hasPrefix("Guide") }!
+    let grip = NSPoint(x:first.frame.minX-18,y:first.frame.midY)
+    func mouse(_ type:NSEvent.EventType,_ point:NSPoint) -> NSEvent {
+        NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:ProcessInfo.processInfo.systemUptime,
+            windowNumber:window.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:1)!
+    }
+    view.mouseDown(with:mouse(.leftMouseDown,grip))
+    view.suspendForSystemChange()
+    view.mouseDragged(with:mouse(.leftMouseDragged,NSPoint(x:grip.x+70,y:grip.y-35)))
+    view.layoutSubtreeIfNeeded()
+    check(buttons.map(\.frame) == beforeDrag,"interrupted toolbar dragging cannot resume after a missed mouse-up")
+    view.mouseUp(with:mouse(.leftMouseUp,grip))
+    if let directory = ProcessInfo.processInfo.environment["BILLIARDS_PREVIEW_DIR"] {
+        view.setLanguage(.zhHans)
+        for size in [NSSize(width:1180,height:790),NSSize(width:360,height:480)] {
+            view.setFrameSize(size); view.needsLayout = true; view.layoutSubtreeIfNeeded()
+            let bitmap = view.bitmapImageRepForCachingDisplay(in:view.bounds)!
+            view.cacheDisplay(in:view.bounds,to:bitmap)
+            let url = URL(fileURLWithPath:directory).appendingPathComponent("billiards-\(Int(size.width)).png")
+            try! bitmap.representation(using:.png,properties:[:])!.write(to:url)
+        }
+    }
     window.orderOut(nil)
     print("\(passed) session checks passed; \(failures) failed")
     exit(failures == 0 ? 0 : 1)

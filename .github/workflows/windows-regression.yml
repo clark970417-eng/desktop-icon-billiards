@@ -1,0 +1,71 @@
+name: Windows regression guard
+
+on:
+  push:
+    paths:
+      - "macos/**"
+      - "dib/**"
+      - "tests/**"
+      - "app.pyw"
+      - "build.ps1"
+      - "DesktopIconBilliards.spec"
+      - "requirements*.txt"
+      - "tools/gen_version_info.py"
+      - "assets/**"
+      - ".github/workflows/windows-regression.yml"
+  pull_request:
+    paths:
+      - "macos/**"
+      - "dib/**"
+      - "tests/**"
+      - "app.pyw"
+      - "build.ps1"
+      - "DesktopIconBilliards.spec"
+      - "requirements*.txt"
+      - "tools/gen_version_info.py"
+      - "assets/**"
+      - ".github/workflows/windows-regression.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  original-windows-tests-and-exe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+      - name: Install the original pinned Windows build requirements
+        run: |
+          uv venv --python 3.12 .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip install --python .\.venv\Scripts\python.exe -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the entire original Windows test suite
+        run: |
+          .\.venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -t . -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package the unchanged Windows executable
+        run: pwsh -File build.ps1 -SkipDeps
+      - name: Upload the Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopIconBilliards-Windows-regression
+          path: dist/DesktopIconBilliards-*-win-x64.exe
+          if-no-files-found: error
+          retention-days: 14

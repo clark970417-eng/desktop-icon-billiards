@@ -14,6 +14,8 @@ struct DesktopItem {
 struct DesktopSnapshot {
     let items: [DesktopItem]
     let iconSize: CGFloat
+    var totalItemCount: Int = 0
+    static let maximumCapturedItems = 512
 
     /// Invoke only after an explicit desktop-play action. macOS may present
     /// its Finder Automation consent dialog. This script contains only reads;
@@ -39,7 +41,7 @@ struct DesktopSnapshot {
     static func parse(_ descriptor: NSAppleEventDescriptor,
                       loadImage: (URL) -> NSImage = { NSWorkspace.shared.icon(forFile: $0.path) }) throws -> DesktopSnapshot {
         guard descriptor.descriptorType == typeAEList,
-              descriptor.numberOfItems == 2,
+              (2...3).contains(descriptor.numberOfItems),
               let sizeDescriptor = descriptor.atIndex(1),
               let rows = descriptor.atIndex(2), rows.descriptorType == typeAEList else {
             throw SnapshotError.invalidResponse
@@ -47,18 +49,22 @@ struct DesktopSnapshot {
         let iconSize = CGFloat(max(16, min(256, sizeDescriptor.int32Value)))
         var items: [DesktopItem] = []
         if rows.numberOfItems > 0 {
-            for index in 1...min(45, rows.numberOfItems) {
+            for index in 1...min(Self.maximumCapturedItems, rows.numberOfItems) {
                 guard let row = rows.atIndex(index), row.descriptorType == typeAEList,
                       row.numberOfItems == 2,
-                      let path = row.atIndex(1)?.stringValue, path.hasPrefix("/"),
+                      let path = row.atIndex(1)?.stringValue,
                       let pointDescriptor = row.atIndex(2),
                       let position = decodePoint(pointDescriptor) else { continue }
-                let url = URL(fileURLWithPath: path)
+                let url: URL
+                if path.hasPrefix("/") { url = URL(fileURLWithPath: path) }
+                else if let file = URL(string: path), file.isFileURL { url = file }
+                else { continue }
                 items.append(DesktopItem(url: url, finderPosition: position, image: loadImage(url)))
             }
         }
         guard !items.isEmpty else { throw SnapshotError.noDesktopItems }
-        return DesktopSnapshot(items: items, iconSize: iconSize)
+        return DesktopSnapshot(items: items, iconSize: iconSize,
+            totalItemCount: max(items.count, min(1_000_000, Int(descriptor.atIndex(3)?.int32Value ?? Int32(rows.numberOfItems)))))
     }
 
     static func decodePoint(_ descriptor: NSAppleEventDescriptor) -> NSPoint? {
@@ -93,13 +99,13 @@ struct DesktopSnapshot {
         var errorDescription: String? {
             switch self {
             case .automationDenied:
-                return "尚未允許讀取 Finder 桌面圖示。請到「系統設定 → 隱私權與安全性 → 自動化」，允許 Desktop Icon Billiards 控制 Finder 後再試一次。遊戲只會讀取圖示與位置。"
+                return "尚未允许读取 Finder 桌面图标。请到「系统设置 → 隐私权与安全性 → 自动化」，允许 Desktop Icon Billiards 控制 Finder 后再试一次。游戏只会读取图标与位置。"
             case .noDesktopItems:
-                return "Finder 桌面上沒有可用的圖示。請先放置檔案或資料夾，並確認桌面圖示已顯示。"
+                return "Finder 桌面上没有可用的图标。请先放置文件或文件夹，并确认桌面图标已显示。"
             case .finderReadFailed(let code):
-                return "無法讀取 Finder 桌面圖示（錯誤 \(code)）。桌面與檔案均未變更。"
+                return "无法读取 Finder 桌面图标（错误 \(code)）。桌面与文件均未变更。"
             case .scriptUnavailable, .invalidResponse:
-                return "無法取得 Finder 桌面圖示與位置。桌面與檔案均未變更。"
+                return "无法取得 Finder 桌面图标与位置。桌面与文件均未变更。"
             }
         }
     }
@@ -114,22 +120,18 @@ struct DesktopSnapshot {
                 set desktopIconSize to icon size of icon view options of container window of desktop
             end try
             set snapshotRows to {}
-            set desktopItems to every item of desktop
-            set itemLimit to count of desktopItems
-            if itemLimit > 45 then set itemLimit to 45
+            set sourceURLs to URL of every item of desktop
+            set iconPoints to desktop position of every item of desktop
+            set totalItems to count of sourceURLs
+            set itemLimit to totalItems
+            if itemLimit > count of iconPoints then set itemLimit to count of iconPoints
+            if itemLimit > 512 then set itemLimit to 512
             if itemLimit > 0 then
                 repeat with itemIndex from 1 to itemLimit
-                    try
-                        set desktopItem to item itemIndex of desktopItems
-                        set sourcePath to POSIX path of (desktopItem as alias)
-                        set iconPoint to desktop position of desktopItem
-                        set end of snapshotRows to {sourcePath, iconPoint}
-                    on error errorText number errorNumber
-                        if errorNumber is -1743 then error number errorNumber
-                    end try
+                    set end of snapshotRows to {item itemIndex of sourceURLs, item itemIndex of iconPoints}
                 end repeat
             end if
-            return {desktopIconSize, snapshotRows}
+            return {desktopIconSize, snapshotRows, totalItems}
         end tell
     end timeout
     """

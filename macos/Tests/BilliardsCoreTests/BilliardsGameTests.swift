@@ -164,6 +164,7 @@ final class BilliardsGameTests: XCTestCase {
         XCTAssertEqual(game.elapsed, 0)
         XCTAssertFalse(game.shoot(toward: game.balls[0].position, power: 1))
         XCTAssertFalse(game.shoot(toward: Vector(.nan, 0), power: 1))
+        XCTAssertFalse(game.shoot(toward: Vector(.greatestFiniteMagnitude, .greatestFiniteMagnitude), power: 1))
         XCTAssertFalse(game.shoot(toward: Vector(900, 250), power: .infinity))
         XCTAssertTrue(game.shoot(toward: Vector(900, 250), power: 0.4))
         game.step(0.025)
@@ -184,5 +185,188 @@ final class BilliardsGameTests: XCTestCase {
         }
         let slow = run(fps: 30), fast = run(fps: 120)
         XCTAssertLessThan((slow.balls[0].position - fast.balls[0].position).length, 5)
+    }
+
+    func testRackAndCueGeometryMatchesWindowsWithUsablePocketSizing() {
+        let game = BilliardsGame(iconCount: 15)
+        XCTAssertEqual(game.balls[0].radius, 25, accuracy: 0.00001)
+        XCTAssertEqual(game.balls[1].radius, 36.34, accuracy: 0.00001)
+        XCTAssertEqual(game.balls[0].position.x, 200, accuracy: 0.00001)
+        XCTAssertEqual(game.balls[1].position.x, 520, accuracy: 0.00001)
+        XCTAssertEqual(game.pocketRadius, game.balls[1].radius * 1.2, accuracy: 0.00001)
+    }
+
+    func testPocketsFitPhysicalBallsAndDoNotShrinkAsTheySink() {
+        for count in 15...45 {
+            let game = BilliardsGame(iconCount: count)
+            let radius = game.pocketRadius
+            for ball in game.balls { XCTAssertGreaterThanOrEqual(radius + 0.000001, ball.radius * 1.2) }
+            game.balls[1].pocketed = true
+            XCTAssertEqual(game.pocketRadius, radius)
+        }
+    }
+
+    func testEverySupportedRackCapturesSlowAndFastBallsInAllSixPockets() {
+        for count in 15...45 {
+            for speed in [94.8, 2504.3] {
+                for pocketIndex in 0..<6 {
+                    let game = BilliardsGame(iconCount: count), pocket = game.pockets[pocketIndex]
+                    let inward = Vector(game.width / 2, game.height / 2) - pocket
+                    let unit = inward * (1 / inward.length)
+                    let startDistance = game.pocketRadius - game.balls[1].radius * 0.15 + 5
+                    game.balls[1].position = pocket + unit * startDistance
+                    game.balls[1].velocity = unit * -speed
+                    for _ in 0..<30 { game.step(1 / 120) }
+                    XCTAssertTrue(game.balls[1].pocketed, "rack=\(count), pocket=\(pocketIndex), speed=\(speed)")
+                }
+            }
+        }
+    }
+
+    func testCaptureOccursInsideTheVisibleHoleRatherThanOutsideIt() {
+        for count in 15...45 {
+            let game = BilliardsGame(iconCount: count)
+            game.balls[1].position = Vector(game.width / 2, game.pocketRadius + 0.5)
+            game.balls[1].velocity = Vector(0, 1)
+            game.step(1 / 120)
+            XCTAssertFalse(game.balls[1].pocketed)
+            game.balls[1].position = Vector(game.width / 2, game.pocketRadius - game.balls[1].radius * 0.15 - 0.5)
+            game.balls[1].velocity = Vector(0, -1)
+            game.step(1 / 120)
+            XCTAssertTrue(game.balls[1].pocketed)
+        }
+    }
+
+    func testCueBallsEnterEveryPocketAtMinimumAndMaximumPowerAndRespotSafely() {
+        for count in 15...45 {
+            for power in [0.0, 1.0] {
+                for pocketIndex in 0..<6 {
+                    let game = BilliardsGame(iconCount: count), pocket = game.pockets[pocketIndex]
+                    let inward = Vector(game.width / 2, game.height / 2) - pocket
+                    let unit = inward * (1 / inward.length)
+                    let startDistance = game.pocketRadius - game.balls[0].radius * 0.15 + 5
+                    game.balls[0].position = pocket + unit * startDistance
+                    XCTAssertTrue(game.shoot(toward: pocket, power: power))
+                    for _ in 0..<30 { game.step(1 / 120) }
+                    XCTAssertFalse(game.balls[0].pocketed)
+                    XCTAssertFalse(game.needsCuePlacement)
+                    XCTAssertLessThan((game.balls[0].position - Vector(game.width * 0.23, game.height / 2)).length, 0.00001)
+                }
+            }
+        }
+    }
+
+    func testPocketAimGuideUsesTheExactPhysicalEntryCircle() {
+        for count in 15...45 {
+            for pocketIndex in 0..<6 {
+                let game = BilliardsGame(iconCount: count), pocket = game.pockets[pocketIndex]
+                let inward = Vector(game.width / 2, game.height / 2) - pocket
+                let unit = inward * (1 / inward.length)
+                let expectedDistance = game.pocketRadius - game.balls[0].radius * 0.15
+                game.balls[0].position = pocket + unit * (expectedDistance + 5)
+                let guide = game.aimGuide(toward: pocket)
+                XCTAssertEqual(guide.cuePath.count, 2)
+                XCTAssertNil(guide.targetBallID)
+                XCTAssertNil(guide.collisionCenter)
+                XCTAssertEqual((guide.cuePath[1] - pocket).length, expectedDistance, accuracy: 0.00001)
+            }
+        }
+    }
+
+    func testSlowRenderingDoesNotShortenTheActiveClock() {
+        let game = BilliardsGame(iconCount: 1)
+        game.balls[1].position = Vector(850, 350)
+        XCTAssertTrue(game.shoot(toward: Vector(900, 250), power: 0.2))
+        game.step(0.4)
+        XCTAssertEqual(game.elapsed, 0.4, accuracy: 0.000001)
+        XCTAssertLessThan(game.balls[0].position.x, 300)
+    }
+
+    func testHeadOnGuideShowsPhysicalContactWithoutChangingTheRound() {
+        let game = BilliardsGame(iconCount: 1)
+        game.balls[0].position = Vector(200, 250)
+        game.balls[1].position = Vector(500, 250)
+        let original = game.balls
+        let guide = game.aimGuide(toward: Vector(900, 250))
+        XCTAssertEqual(guide.targetBallID, game.balls[1].id)
+        XCTAssertEqual(guide.collisionCenter?.x ?? 0, 500 - game.balls[0].radius - game.balls[1].radius, accuracy: 0.0001)
+        XCTAssertEqual(guide.objectPath.count, 2)
+        XCTAssertGreaterThan(guide.objectPath[1].x, guide.objectPath[0].x)
+        XCTAssertEqual(game.balls, original)
+        XCTAssertEqual(game.shots, 0)
+        XCTAssertEqual(game.elapsed, 0)
+    }
+
+    func testGlancingGuideSeparatesCueAndObjectDirections() {
+        let game = BilliardsGame(iconCount: 1)
+        game.balls[0].position = Vector(200, 200)
+        game.balls[1].position = Vector(500, 250)
+        let guide = game.aimGuide(toward: Vector(900, 300))
+        XCTAssertEqual(guide.cuePath.count, 3)
+        XCTAssertEqual(guide.objectPath.count, 2)
+        XCTAssertLessThan(guide.cuePath[2].y, guide.cuePath[1].y)
+        XCTAssertGreaterThan(guide.objectPath[1].y, guide.objectPath[0].y)
+    }
+
+    func testRailGuideReflectsOnceAtTheRadiusInset() {
+        let game = BilliardsGame(iconCount: 1)
+        game.balls[0].position = Vector(200, 150)
+        game.balls[1].position = Vector(850, 350)
+        let guide = game.aimGuide(toward: Vector(200, 900))
+        XCTAssertNil(guide.targetBallID)
+        XCTAssertEqual(guide.cuePath.count, 3)
+        XCTAssertEqual(guide.cuePath[1].y, game.height - game.balls[0].radius, accuracy: 0.0001)
+        XCTAssertEqual(guide.cuePath[2].y, game.balls[0].radius, accuracy: 0.0001)
+    }
+
+    func testOutgoingObjectGuideStopsAtTheNextIcon() {
+        let game = BilliardsGame(iconCount: 2)
+        game.balls[0].position = Vector(200, 250)
+        game.balls[1].position = Vector(500, 250)
+        game.balls[2].position = Vector(700, 250)
+        let guide = game.aimGuide(toward: Vector(900, 250))
+        XCTAssertEqual(guide.objectPath.last?.x ?? 0, 700 - game.balls[1].radius - game.balls[2].radius, accuracy: 0.0001)
+    }
+
+    func testSteepCornerMouthGuideAndPhysicsAgree() {
+        let game = BilliardsGame(iconCount: 1)
+        game.balls[0].position = Vector(100, 450)
+        game.balls[1].position = Vector(850, 350)
+        let guide = game.aimGuide(toward: Vector(0, 20))
+        XCTAssertEqual(guide.cuePath.count, 2)
+        XCTAssertNil(guide.collisionCenter)
+        let origin = Vector(100, 450), offset = Vector(0, 20) - origin
+        game.balls[0].position = Vector(800, 250)
+        game.balls[1].position = origin
+        game.balls[1].velocity = offset * (800 / offset.length)
+        for _ in 0..<200 { game.step(1 / 120) }
+        XCTAssertTrue(game.balls[1].pocketed)
+    }
+
+    func testWeakCornerMouthApproachSettlesInsideTheLegalRails() {
+        for power in stride(from: 0.100, through: 0.115, by: 0.001) {
+            for fps in [30.0, 60.0, 120.0] {
+                let game = BilliardsGame(iconCount: 1)
+                game.balls[0].position = Vector(200, 250)
+                game.balls[1].position = Vector(850, 350)
+                XCTAssertTrue(game.shoot(toward: Vector(0, 20), power: power))
+                for _ in 0..<Int(fps * 5) { game.step(1 / fps) }
+                XCTAssertFalse(game.isMoving)
+                for ball in game.balls where !ball.pocketed {
+                    XCTAssertGreaterThanOrEqual(ball.position.x, ball.radius)
+                    XCTAssertLessThanOrEqual(ball.position.x, game.width - ball.radius)
+                    XCTAssertGreaterThanOrEqual(ball.position.y, ball.radius)
+                    XCTAssertLessThanOrEqual(ball.position.y, game.height - ball.radius)
+                }
+            }
+        }
+    }
+
+    func testGuidesAreUnavailableForInvalidOrRollingState() {
+        let game = BilliardsGame()
+        XCTAssertTrue(game.aimGuide(toward: Vector(.nan, 0)).cuePath.isEmpty)
+        XCTAssertTrue(game.aimGuide(toward: Vector(.greatestFiniteMagnitude, .greatestFiniteMagnitude)).cuePath.isEmpty)
+        XCTAssertTrue(game.shoot(toward: Vector(900, 250), power: 0.2))
+        XCTAssertTrue(game.aimGuide(toward: Vector(900, 250)).cuePath.isEmpty)
     }
 }

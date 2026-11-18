@@ -4,11 +4,11 @@
 
 Windows 10 / 11 x64 · 单文件 EXE · MIT
 
-## Mac 版原型
+## Mac 版本（预览）
 
-此 fork 新增 macOS 原型 v0.3.0，使用 Swift 與 AppKit 製作，支援 macOS 13 以上。點擊「桌面開局」，可讓主螢幕的真實桌面圖示從原位飛入球桌；點擊「退出還原」後，圖示飛回原位並結束遊戲。首次使用需允許讀取 Finder 圖示與位置；遊戲以桌布覆蓋原始圖示，檔案與 Finder 排列始終保留。圖片檔會顯示各自的內容縮圖。一般視窗優先使用 `/Applications` 裡的 App 圖示，也可選取其他資料夾試玩。
+此 fork 新增 macOS 版本 v0.4.0，支持 macOS 13 以上，默认简体中文，可切换英文。支持Windows 风格的两行工具栏、壁纸模糊台面、桌面图标与图片缩略图、15–45 颗球、碰撞后辅助线、隐藏台面、白球图片裁切、成绩卡及默认关闭的可选全球排名。原始文件和 Finder 排列始终保留。Windows 实现、依赖、构建脚本与原始测试均未改动。
 
-[Mac 版操作與建置說明](macos/README.md) · 原始碼位於 `macos/`。以下內容為原作者的 Windows 版說明。
+[Mac 使用与构建说明](macos/README.md) · [功能对照、验证范围与合并要求](docs/macOS-parity-review.md)。旧版 macOS、Intel、多屏硬件与正式签名仍需独立验证，不能据此宣称所有环境已与 Windows 同等成熟。以下为原作者的 Windows 版说明。
 
 ![实机画面：桌面图标排成球阵，白球瞄准库边，虚线显示反弹路线](docs/images/desktop-gameplay.jpg)
 

@@ -45,6 +45,8 @@ mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$EXECUTABLE" "$APP_PATH/Contents/MacOS/DesktopIconBilliards"
 cp "$MACOS_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
 cp "$REPO_DIR/LICENSE" "$APP_PATH/Contents/Resources/LICENSE"
+cp "$REPO_DIR/assets/desktop-icon-billiards.png" "$APP_PATH/Contents/Resources/desktop-icon-billiards.png"
+cp "$REPO_DIR/assets/donation.jpg" "$APP_PATH/Contents/Resources/donation.jpg"
 cp "$MACOS_DIR/README.md" "$APP_PATH/Contents/Resources/README.md"
 chmod +x "$APP_PATH/Contents/MacOS/DesktopIconBilliards"
 
