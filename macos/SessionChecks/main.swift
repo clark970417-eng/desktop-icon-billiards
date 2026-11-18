@@ -36,6 +36,11 @@ MainActor.assumeIsolated {
         let until = Date(timeIntervalSinceNow: seconds)
         while Date() < until { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01)) }
     }
+    func color(_ image: NSImage) -> NSColor? {
+        var rect = NSRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        return NSBitmapImageRep(cgImage: cg).colorAt(x: cg.width / 2, y: cg.height / 2)?.usingColorSpace(.deviceRGB)
+    }
     do {
         try view.startDesktop(snapshot: snapshot, backdrop: backdrop, screen: screen, presentWindow: false)
         check(view.desktopMode && view.isDesktopTransitioning, "desktop entry starts with real item count")
@@ -68,6 +73,43 @@ MainActor.assumeIsolated {
         } catch {
             check(!view.desktopMode && window.frame == previousWindowFrame, "off-display desktop rejects before changing window")
         }
+        let fixtures = FileManager.default.temporaryDirectory.appendingPathComponent("billiards-session-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+        let colors: [NSColor] = [.red, .blue]
+        var pictureItems: [DesktopItem] = []
+        for index in 0..<2 {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 320, pixelsHigh: 160,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            colors[index].setFill()
+            NSRect(x: 0, y: 0, width: 320, height: 160).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            let url = fixtures.appendingPathComponent("picture\(index).png")
+            try bitmap.representation(using: .png, properties: [:])!.write(to: url)
+            pictureItems.append(DesktopItem(url: url, finderPosition: NSPoint(x: 100 + index * 100, y: 200), image: image))
+        }
+        try view.startDesktop(snapshot: .init(items: pictureItems, iconSize: 64), backdrop: backdrop,
+                              screen: screen, presentWindow: false)
+        pump(1.0)
+        let red = color(view.iconSet.images[0]), blue = color(view.iconSet.images[1])
+        check((red?.redComponent ?? 0) > 0.9 && (blue?.blueComponent ?? 0) > 0.9,
+              "desktop balls replace matching generic icons with distinct picture content")
+        check(view.iconSet.images[0].size.width == view.iconSet.images[0].size.height * 2,
+              "desktop ball artwork retains the source picture aspect ratio")
+        let canvas = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+        view.cacheDisplay(in: view.bounds, to: canvas)
+        let center = view.screenPoint(view.game.balls[1].position)
+        let rendered = canvas.colorAt(x: Int(center.x * CGFloat(canvas.pixelsWide) / view.bounds.width),
+                                     y: Int((view.bounds.height - center.y) * CGFloat(canvas.pixelsHigh) / view.bounds.height))?.usingColorSpace(.deviceRGB)
+        check((rendered?.redComponent ?? 0) > 0.8 && (rendered?.blueComponent ?? 1) < 0.2,
+              "actual ball renderer displays picture pixels instead of a file type icon")
+        view.restoreDesktop()
+        pump(0.75)
+        check(!view.desktopMode && view.iconSet.sourceURLs.allSatisfy { $0.pathExtension == "app" },
+              "restoring from picture balls returns to the installed App source")
+        try FileManager.default.removeItem(at: fixtures)
     } catch { failures += 1; print("FAIL desktop session setup") }
     window.orderOut(nil)
     print("\(passed) session checks passed; \(failures) failed")

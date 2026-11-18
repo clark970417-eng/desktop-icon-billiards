@@ -27,6 +27,8 @@ jobs:
         run: swift test --package-path macos
       - name: Test desktop decoding and wallpaper geometry
         run: bash macos/check-desktop.sh
+      - name: Test image thumbnails and cancellation
+        run: bash macos/check-artwork.sh
       - name: Test desktop entry and restoration with invisible fixtures
         run: bash macos/check-session.sh
       - name: Build a universal app

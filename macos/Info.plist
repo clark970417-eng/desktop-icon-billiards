@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>0.3.0</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
@@ -29,7 +29,7 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>選取桌面資料夾後，讀取檔案的圖示作為撞球。原始檔案不會被修改或移動。</string>
+    <string>讀取桌面檔案圖示與圖片縮圖作為撞球，方便辨識每張圖片。原始檔案不會被修改或移動。</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>讀取 Finder 桌面圖示與原始位置，讓圖示進入撞球遊戲並在退出時回到原位。不修改檔案、圖示位置或 Finder 設定。</string>
     <key>NSHumanReadableCopyright</key>

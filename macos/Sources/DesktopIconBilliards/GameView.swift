@@ -44,6 +44,8 @@ final class GameView: NSView {
     private var previousIconSet: IconSet?
     private var desktopTransition: DesktopTransition?
     private var pendingDesktopExit: (() -> Void)?
+    private let artworkLoader = ArtworkLoader()
+    private var scopedSourceFolder: URL?
     var isDesktopTransitioning: Bool { desktopTransition != nil }
 
     private struct DesktopTransition {
@@ -101,6 +103,7 @@ final class GameView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
     deinit {
         timer?.invalidate()
+        scopedSourceFolder?.stopAccessingSecurityScopedResource()
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
         if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
     }
@@ -121,6 +124,22 @@ final class GameView: NSView {
         restartButton.frame = NSRect(x: bounds.width - 118, y: bounds.height - 69, width: 100, height: 30)
         guideButton.frame = NSRect(x: 32, y: 73, width: 132, height: 30)
         pauseButton.frame = NSRect(x: 172, y: 73, width: 124, height: 30)
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { refreshArtwork() } else { artworkLoader.cancel() }
+    }
+
+    private func refreshArtwork() {
+        artworkLoader.load(urls: iconSet.sourceURLs) { [weak self] index, image in
+            guard let self, self.iconSet.images.indices.contains(index) else { return }
+            self.iconSet.images[index] = image
+            if self.desktopMode, self.desktopItems.indices.contains(index) {
+                let item = self.desktopItems[index]
+                self.desktopItems[index] = DesktopItem(url: item.url, finderPosition: item.finderPosition, image: image)
+            }
+            self.needsDisplay = true
+        }
     }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
@@ -241,12 +260,17 @@ final class GameView: NSView {
             self.paused = self.sessionWasPaused
             if response == .OK, let url = panel.url {
                 let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    self.iconSet = try IconSet.folder(url)
+                    let nextSet = try IconSet.folder(url)
+                    self.artworkLoader.cancel()
+                    self.scopedSourceFolder?.stopAccessingSecurityScopedResource()
+                    self.scopedSourceFolder = scoped ? url : nil
+                    self.iconSet = nextSet
                     self.restart()
+                    self.refreshArtwork()
                     self.showToast("已換成資料夾圖示，開始新的一局")
                 } catch {
+                    if scoped { url.stopAccessingSecurityScopedResource() }
                     self.showToast("無法讀取圖示：\(error.localizedDescription)")
                 }
             }
@@ -293,6 +317,7 @@ final class GameView: NSView {
         }
         guard !candidates.isEmpty else { throw DesktopSnapshot.SnapshotError.noDesktopItems }
         previousIconSet = iconSet
+        artworkLoader.cancel()
         savedFrame = window.frame
         savedStyle = window.styleMask
         desktopItems = candidates.map { $0.0 }
@@ -301,7 +326,8 @@ final class GameView: NSView {
         desktopBackdrop = backdrop
         wallpaperRect = NSRect(x: screen.frame.minX - frame.minX, y: screen.frame.minY - frame.minY,
                                width: screen.frame.width, height: screen.frame.height)
-        iconSet = IconSet(images: desktopItems.map(\.image), label: "你的桌面圖示 · \(desktopItems.count) 顆")
+        iconSet = IconSet(images: desktopItems.map(\.image), label: "你的桌面圖示 · \(desktopItems.count) 顆",
+                          sourceURLs: desktopItems.map(\.url))
         game.reset(iconCount: desktopItems.count)
         lastPocketCount = 0
         paused = false
@@ -323,6 +349,7 @@ final class GameView: NSView {
         if presentWindow { window.makeKeyAndOrderFront(nil) }
         window.makeFirstResponder(self)
         lastTick = ProcessInfo.processInfo.systemUptime
+        refreshArtwork()
         needsDisplay = true
     }
 
@@ -330,6 +357,7 @@ final class GameView: NSView {
         guard desktopMode else { completion?(); return }
         if let completion { pendingDesktopExit = completion }
         if desktopTransition?.returning == true { return }
+        artworkLoader.cancel()
         let now = ProcessInfo.processInfo.systemUptime
         let positions = desktopTransition.map { transitionPositions($0, now: now) }
             ?? game.balls.filter { !$0.isCue }.map { screenPoint($0.position) }
@@ -364,6 +392,7 @@ final class GameView: NSView {
             desktopButton.title = "桌面開局"
             folderButton.isEnabled = true
             restart()
+            refreshArtwork()
             let completion = pendingDesktopExit
             pendingDesktopExit = nil
             completion?()
@@ -394,7 +423,7 @@ final class GameView: NSView {
         for (index, point) in positions.enumerated() where index < desktopItems.count {
             let alpha = transition.returning ? transition.fromAlpha[index] + (1 - transition.fromAlpha[index]) * eased : 1
             let imageRect = NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
-            desktopItems[index].image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: alpha)
+            drawArtwork(desktopItems[index].image, in: imageRect, alpha: alpha)
             let labelAlpha = transition.returning ? eased : 1 - eased
             text(desktopItems[index].url.lastPathComponent, at: NSPoint(x: point.x, y: point.y - size / 2 - 18),
                  size: 11, color: .white.withAlphaComponent(labelAlpha), centered: true)
@@ -418,6 +447,14 @@ final class GameView: NSView {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         fill.setFill(); path.fill()
         if let stroke { stroke.setStroke(); path.lineWidth = 1; path.stroke() }
+    }
+    private func drawArtwork(_ image: NSImage, in rect: NSRect, alpha: CGFloat = 1) {
+        guard image.size.width > 0, image.size.height > 0 else { return }
+        let factor = min(rect.width / image.size.width, rect.height / image.size.height)
+        let size = NSSize(width: image.size.width * factor, height: image.size.height * factor)
+        let target = NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                            width: size.width, height: size.height)
+        image.draw(in: target, from: .zero, operation: .sourceOver, fraction: alpha)
     }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -517,7 +554,7 @@ final class GameView: NSView {
             NSColor(hex: 0x0c2420, alpha: 0.45).setFill(); NSBezierPath(ovalIn: circle).fill()
             if !iconSet.images.isEmpty {
                 let image = iconSet.images[(max(1, ball.id) - 1) % iconSet.images.count]
-                image.draw(in: circle.insetBy(dx: r * 0.06, dy: r * 0.06), from: .zero, operation: .sourceOver, fraction: 1)
+                drawArtwork(image, in: circle.insetBy(dx: r * 0.06, dy: r * 0.06))
             }
             NSColor.white.withAlphaComponent(0.12).setStroke()
             NSBezierPath(ovalIn: circle).stroke()

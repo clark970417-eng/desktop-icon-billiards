@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Desktop Icon Billiards · Mac 原型",
-            .applicationVersion: "0.2.0",
+            .applicationVersion: "0.3.0",
             .credits: NSAttributedString(string: "原作 LXG / liuxiaogang-com\nMac fork: clark970417-eng\nMIT License\n圖示在本機讀取；無網路連線與成績上傳。")
         ])
     }

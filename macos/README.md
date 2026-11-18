@@ -1,12 +1,12 @@
 # Desktop Icon Billiards for macOS
 
-Mac 原型 v0.2.0，支援 macOS 13 以上。點擊「桌面開局」，就能把你桌面上的圖示收進球桌，用滑鼠瞄準、蓄力擊球；退出時，圖示會飛回原位，遊戲視窗隨後關閉。
+Mac 原型 v0.3.0，支援 macOS 13 以上。點擊「桌面開局」，就能把你桌面上的圖示收進球桌，用滑鼠瞄準、蓄力擊球；退出時，圖示會飛回原位，遊戲視窗隨後關閉。
 
 這個版本位於 [clark970417-eng/desktop-icon-billiards](https://github.com/clark970417-eng/desktop-icon-billiards) fork，由 Swift 和 AppKit 實作。原作者 [LXG 的 Windows 版](https://github.com/liuxiaogang-com/desktop-icon-billiards) 保留在專案根目錄；以下操作說明適用於 Mac 原型。
 
 ## 啟動與桌面開局
 
-取得已建置的 `.app` 後，雙擊 `Desktop Icon Billiards.app` 啟動。App 先顯示一般視窗，使用 15 個本機 App 圖示供你試玩；「選取資料夾…」也能載入其他資料夾的圖示，少於 15 個項目時會重複補足。
+取得已建置的 `.app` 後，雙擊 `Desktop Icon Billiards.app` 啟動。App 先顯示一般視窗，優先使用 `/Applications` 中的 15 個 App 圖示供你試玩，不足時才補入系統 App；「選取資料夾…」也能載入其他資料夾的圖示，少於 15 個項目時會重複補足。
 
 要使用真正的桌面圖示：
 
@@ -19,6 +19,12 @@ Mac 原型 v0.2.0，支援 macOS 13 以上。點擊「桌面開局」，就能�
 桌面球局以當前桌布的靜態圖片覆蓋原始圖示，再繪製可移動的遊戲圖示。原本的 Finder 檔案、圖示位置與設定始終保留；即使 App 當掉或被強制結束，覆蓋視窗消失後也會露出原桌面。
 
 這是開發原型，使用本機 ad-hoc 簽章，尚未經 Apple Developer ID 簽署或公證。從網路下載的版本可能需要在 Finder 中按右鍵選「打開」，或在系統設定的「隱私權與安全性」確認開啟。
+
+## 圖片縮圖
+
+桌面與自選資料夾中的 PNG、JPEG、HEIC 等可讀取圖片，會在背景載入各自的內容縮圖，保留長寬比與照片方向。載入完成前暫時顯示檔案圖示；App 與其他檔案保留原本圖示。縮圖最多 256 像素，原圖不會被修改。
+
+若圖片損壞、沒有讀取權限或只存於 iCloud 尚未下載，會保留檔案圖示。遊戲不會為了縮圖自動下載雲端原圖；若 macOS 詢問桌面檔案存取權限，允許後才能讀取圖片內容。
 
 ## 玩法
 
@@ -46,7 +52,7 @@ Mac 原型 v0.2.0，支援 macOS 13 以上。點擊「桌面開局」，就能�
 
 ## 圖示與隱私
 
-遊戲只讀取項目名稱、來源路徑、系統圖示與桌面位置，不修改、移動、刪除或開啟來源檔案，也不更改 Finder 的排列設定或系統桌布。圖示與位置只用於本機遊戲畫面，不會寫入原始碼或發行套件。原型沒有排行榜、更新連線或遙測，不上傳桌面內容或遊戲成績。
+遊戲讀取項目名稱、來源路徑、系統圖示與桌面位置，並讀取本機圖片內容以產生縮圖。不修改、移動或刪除來源檔案，不啟動來源 App，也不更改 Finder 排列或系統桌布。圖示與位置只用於本機遊戲畫面，不會寫入原始碼或發行套件。原型沒有排行榜、更新連線或遙測，不上傳桌面內容或遊戲成績。
 
 ## 從原始碼建置
 
@@ -58,11 +64,13 @@ Mac 原型 v0.2.0，支援 macOS 13 以上。點擊「桌面開局」，就能�
 bash macos/check.sh
 bash macos/check-desktop.sh
 bash macos/check-session.sh
+bash macos/check-artwork.sh
+bash macos/check-applications.sh
 bash macos/build.sh
 open "macos/dist/Desktop Icon Billiards.app"
 ```
 
-腳本會產生本機架構的 App，以及 `macos/dist/DesktopIconBilliards-0.2.0-macOS-<架構>.zip`。App 內附原專案的 MIT 授權。
+腳本會產生本機架構的 App，以及 `macos/dist/DesktopIconBilliards-0.3.0-macOS-<架構>.zip`。App 內附原專案的 MIT 授權。
 
 要同時包含 Apple Silicon 與 Intel 執行檔：
 
@@ -70,9 +78,9 @@ open "macos/dist/Desktop Icon Billiards.app"
 bash macos/build.sh --universal
 ```
 
-Universal 封存檔為 `macos/dist/DesktopIconBilliards-0.2.0-macOS-universal.zip`。建置需要所用 macOS SDK 支援 `arm64` 與 `x86_64`，完成後可用 `lipo -archs "macos/dist/Desktop Icon Billiards.app/Contents/MacOS/DesktopIconBilliards"` 檢查架構。單一架構的本機測試不代表已在另一種 Mac 實機驗證。
+Universal 封存檔為 `macos/dist/DesktopIconBilliards-0.3.0-macOS-universal.zip`。建置需要所用 macOS SDK 支援 `arm64` 與 `x86_64`，完成後可用 `lipo -archs "macos/dist/Desktop Icon Billiards.app/Contents/MacOS/DesktopIconBilliards"` 檢查架構。單一架構的本機測試不代表已在另一種 Mac 實機驗證。
 
-三個檢查腳本可在只有 Command Line Tools 的 Mac 上執行：`check.sh` 驗證撞球模型，`check-desktop.sh` 使用產生的資料驗證桌面資料解析與座標換算，`check-session.sh` 用不顯示的視窗和測試資料驗證桌面球局流程。這些檢查不會向 Finder 讀取真正的桌面，也不會要求 Finder 權限。
+檢查腳本可在只有 Command Line Tools 的 Mac 上執行：`check.sh` 驗證撞球模型，`check-desktop.sh` 使用產生的資料驗證桌面資料解析與座標換算，`check-session.sh` 用不顯示的視窗和測試資料驗證桌面球局流程。`check-artwork.sh` 驗證不同圖片內容、方向與取消載入；`check-applications.sh` 讀取本機 `/Applications` 的 App 圖示，檢查圖樣可區別且來源未變動，不啟動那些 App。這些檢查不會向 Finder 讀取真正的桌面，也不會要求 Finder 權限。
 
 安裝完整 Xcode 並將其設為目前的開發工具後，也可執行保留的 XCTest 套件：
 

@@ -8,6 +8,7 @@ mkdir -p "$CHECK_DIR"
 swiftc -I "$BIN_DIR/Modules" \
     "$MACOS_DIR/Sources/DesktopIconBilliards/GameView.swift" \
     "$MACOS_DIR/Sources/DesktopIconBilliards/Icons.swift" \
+    "$MACOS_DIR/Sources/DesktopIconBilliards/ArtworkLoader.swift" \
     "$MACOS_DIR/Sources/DesktopIconBilliards/DesktopSnapshot.swift" \
     "$MACOS_DIR/Sources/DesktopIconBilliards/DesktopBackdrop.swift" \
     "$MACOS_DIR/SessionChecks/main.swift" \
