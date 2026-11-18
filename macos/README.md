@@ -88,6 +88,6 @@ open "macos/dist/Desktop Icon Billiards.app"
 uv run --no-project --python 3.12 --with Pillow==13.0.0 python macos/check-windows-portable.py
 ```
 
-此脚本明确列出不在 Mac 执行的五个 Windows 专属方法；完整 Windows 套件与 EXE 构建由独立 CI 执行，不修改原版实现或跳过 Windows CI 中的测试。完整 Xcode 环境也可执行 `swift test --package-path macos`。
+此脚本明确列出不在 Mac 执行的五个 Windows 专属方法；完整 Windows 套件与 EXE 构建由独立 CI 执行。原版工具栏测试的旧单行预期已校正为当前两行布局与白球按钮；未修改 Windows 实现，也未跳过测试。完整 Xcode 环境也可执行 `swift test --package-path macos`。
 
 [功能差距、测试证据与原作者合并要求](../docs/macOS-parity-review.md)记录了实现状态与待验证项。通过本机测试不能保证上游合并；决定仍由原作者作出。

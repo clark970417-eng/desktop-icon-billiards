@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: macos-prototype-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-package:
     runs-on: macos-latest

@@ -2,7 +2,7 @@
 
 ## 问题与范围
 
-上游 [issue #9](https://github.com/liuxiaogang-com/desktop-icon-billiards/issues/9#issuecomment-6853106839)记录了 Mac 支持不足及需要更多测试的问题。此变更在 `macos/` 中新增 Swift 与 AppKit 实现，按 Windows v0.2.4 的提交 [`5d1bb4ce1d18b6791d16ae98ce0d1ad6a663252d`](https://github.com/liuxiaogang-com/desktop-icon-billiards/commit/5d1bb4ce1d18b6791d16ae98ce0d1ad6a663252d)保留随开随玩的单人玩法；Windows 源码、测试、依赖与原构建脚本不变。
+上游 [issue #9](https://github.com/liuxiaogang-com/desktop-icon-billiards/issues/9#issuecomment-6853106839)记录了 Mac 支持不足及需要更多测试的问题。此变更在 `macos/` 中新增 Swift 与 AppKit 实现，按 Windows v0.2.4 的提交 [`5d1bb4ce1d18b6791d16ae98ce0d1ad6a663252d`](https://github.com/liuxiaogang-com/desktop-icon-billiards/commit/5d1bb4ce1d18b6791d16ae98ce0d1ad6a663252d)保留随开随玩的单人玩法。Windows 实现、依赖与原构建脚本不变；仅校正一个上游工具条测试的过期预期，使其严格检查原版现有的九个按钮与两行分组布局。
 
 界面与交互按当前 Windows 源码还原，包括紧凑工具条、按钮配色、模糊壁纸、长木质球杆、原图标，以及当前四列统计的成绩卡。局域网 PR #7 尚未合并，此变更不引入双人规则。
 
@@ -20,7 +20,7 @@
 
 先前打包版本在 Apple Silicon Mac 上实际验证过中英文切换，切换后仍保留 12 杆、4 颗入袋的状态。最终 GameView 离屏画面和成绩卡已检查；可见 UI 工具无法读取旧进程窗口，尚未以重启结束用户球局。生成数据和模拟请求不等于多设备或线上服务验证。
 
-新增 Mac 与 Windows CI 检查配置。Windows 工作流将执行完整原测试，再使用原 `build.ps1` 生成 EXE；目前尚未取得实际运行结果。旧 Mac CI 因未分配到托管运行器而没有执行任何步骤，不能作为代码构建失败或成功的证据。详细命令、原作者审查要求与验证边界见 [功能对照及合并审查](macOS-parity-review.md)。
+新增 Mac 与 Windows CI 检查配置。[首次完整 Windows CI](https://github.com/clark970417-eng/desktop-icon-billiards/actions/runs/44367042570)共执行 163 项，162 项通过，1 项因原版工具条测试漏列白球外观按钮而失败。同一测试的旧单行布局、署名层级和回调顺序假设已一并校正，保留精确按钮集合、可见性、位置与逐个回调断言。测试总数不变，修正后的 CI 尚待确认；首次运行未进入后续原 `build.ps1` 的 EXE 构建。旧 Mac CI 因未分配到托管运行器而没有执行任何步骤。详细命令、原作者审查要求与验证边界见 [功能对照及合并审查](macOS-parity-review.md)。
 
 ## 限度与合并前确认
 

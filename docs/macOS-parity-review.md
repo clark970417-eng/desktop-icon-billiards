@@ -36,7 +36,7 @@ Mac 版已补上桌面图标、玩法、界面和生命周期处理的主要差�
 | 语言与窗口状态 | Windows 发布基准为中文；运行时国际化 PR 仍在审查 | Mac 默认简体中文，英文由菜单切换。最终状态文字更新后再布局；成绩、排名、白球与信息窗口会刷新文字和画面。生成数据测试与实际打包操作分别记录，避免把两者混作同一证据。 |
 | 全球排名 | 用户主动开启后连接原排名服务，网络故障不阻止游戏 | 已实现可关闭的原协议客户端、匿名凭据、签名和排行榜；本地模拟请求覆盖提交、失败与取消行为。尚未验证真实 Mac 成绩被线上服务接受，不自动向公共排行榜写入测试成绩。 |
 | 更新与分发 | Windows 单文件 EXE 及版本更新源 | 已加入 Mac 专用的手动更新检查客户端，按版本及架构选择发行附件，不使用 Windows 下载地址，也不自动替换运行文件。16 项拦截请求的更新检查已通过；当前发布列表没有 Mac 安装包，不能冒称已有正式发行。Developer ID 签署与公证仍须单独验证。 |
-| Windows 回归 | Python 原测试及原 PyInstaller 构建 | Windows 源码、测试、依赖锁定及构建脚本均未改动。新增 Windows CI 运行完整原测试并构建 EXE；该 CI 的实际结果尚未验证。 |
+| Windows 回归 | Python 原测试及原 PyInstaller 构建 | Windows 实现、依赖锁定及构建脚本未改动。首次完整 CI 为 162 项通过、1 项失败，失败来自上游工具条测试的过期预期；已校正同一测试的九按钮、两行布局与回调检查，测试总数仍为 163。修正后的 CI 和 EXE 构建结果待确认。 |
 
 ## 已有验证证据
 
@@ -65,7 +65,7 @@ uv run --no-project --python 3.12 --with Pillow==13.0.0 python -m unittest \
   tests.test_table tests.test_balls tests.test_card tests.test_rank tests.test_update -v
 ```
 
-这次发现 99 个测试，其中 94 个通过，5 个会导入 Mac 无法提供的 Windows 图层或排行榜模块。排除这 5 个平台专属方法后，原测试中的其余 94 个全部通过；没有为此修改原测试或 Windows 实现。被排除的方法为：
+这次发现 99 个测试，其中 94 个通过，5 个会导入 Mac 无法提供的 Windows 图层或排行榜模块。排除这 5 个平台专属方法后，原测试中的其余 94 个全部通过；此次本机运行没有改动这些测试或 Windows 实现。后续 Windows CI 发现的工具条测试修正见下方。被排除的方法为：
 
 - `tests.test_table.BilliardsMotionTests.test_pointer_charges_linearly_in_one_and_a_half_seconds`
 - `tests.test_table.BilliardsMotionTests.test_pointer_cycles_and_releases_at_the_current_power`
@@ -79,7 +79,9 @@ uv run --no-project --python 3.12 --with Pillow==13.0.0 python -m unittest \
 
 [先前的 Mac CI 记录](https://github.com/clark970417-eng/desktop-icon-billiards/actions/runs/44350805476)未获得托管运行器，注释为 `The job was not acquired by Runner of type hosted even after multiple attempts`，步骤列表为空。这发生在 Mac ARM 托管运行器分配阶段，尚未执行编译或测试，不能据此判断为应用构建失败，也不能视为构建成功。
 
-新增的 Windows 回归工作流已完成配置和 YAML 语法检查，尚未确认运行结果。后续需要分别取得 Mac 与 Windows 的实际步骤、测试输出和打包附件。
+[首次完整 Windows CI](https://github.com/clark970417-eng/desktop-icon-billiards/actions/runs/44367042570)执行 163 项测试，162 项通过，1 项失败。失败停在上游 `tests/test_toolbar.py` 的按钮集合断言：测试漏掉已经存在于原版 `dib/panel.py` 的 `white` 白球外观按钮。同一测试还保留旧版单行布局、作者署名层级和回调顺序假设，均与该上游基准的两行分组工具条不符。
+
+现仅校正这一个原版工具条测试：严格比对全部九个按钮、逐个确认回调、检查功能与操作两行的位置、完整署名、可见性、边界和重叠。没有跳过测试或改动 Windows 实现，测试总数仍为 163。修正已完成静态检查，尚未取得修正后 Windows CI 的运行结果；首次运行也因测试失败而未执行 EXE 构建。后续仍需确认完整测试输出及打包附件。
 
 ## 合并前仍需完成的检查
 
