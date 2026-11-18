@@ -24,7 +24,9 @@ concurrency:
 
 jobs:
   test-and-package:
-    runs-on: macos-latest
+    # Explicit Intel image adds runtime coverage beside local Apple Silicon
+    # checks and avoids the macos-latest ARM pool's current capacity queue.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - name: Test the physics model
